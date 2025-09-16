@@ -23,29 +23,39 @@ def _decide_matches(
     sim_threshold: float,
     ratio_threshold: float,
     margin_threshold: float,
-    rescue_gap: float = 0.1,   # thêm tham số cứu vớt
+    rescue_gap: float = 0.1,
+    min_rescue_score: float = 0.2,
 ) -> Dict[str, Any]:
     if not matches:
         return {"recognized": False, "matches": []}
 
-    # 1. Lọc theo sim_threshold
+    # 1. Lọc theo sim_threshold (đúng hoàn toàn)
     filtered = [m for m in matches if m.get("distance", 0.0) >= sim_threshold]
     if filtered:
         return {"recognized": True, "matches": filtered}
 
-    # 2. Nếu không qua ngưỡng, áp dụng cơ chế "cứu vớt"
+    # 2. Nếu không đạt ngưỡng đúng, xét cứu vớt trong khoảng [0.2, sim_threshold)
     rescued = []
     if matches:
-        rescued.append(matches[0])  # luôn giữ Top-1
-        for i in range(1, len(matches)):
-            prev_score = rescued[-1].get("distance", 0.0)
-            curr_score = matches[i].get("distance", 0.0)
-            if prev_score - curr_score <= rescue_gap:
+        first_score = matches[0].get("distance", 0.0)
+        if first_score >= min_rescue_score:
+            rescued.append(matches[0])  # luôn giữ Top-1 nếu ≥ 0.2
+            for i in range(1, len(matches)):
+                curr_score = matches[i].get("distance", 0.0)
+
+                # dừng nếu score < 0.2
+                if curr_score < min_rescue_score:
+                    break
+
+                # dừng nếu chênh lệch quá rescue_gap
+                prev_score = rescued[-1].get("distance", 0.0)
+                if prev_score - curr_score > rescue_gap:
+                    break
+
                 rescued.append(matches[i])
-            else:
-                break
 
     return {"recognized": False, "matches": rescued}
+
 
 
 
