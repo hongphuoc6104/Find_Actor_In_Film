@@ -63,3 +63,26 @@ thư mục được cấu hình tại `storage.cluster_previews_root`. Mỗi
 `cluster_<id>` chứa tối đa 3 khung hình đại diện cùng với file
 `metadata.json` mô tả thứ tự xuất hiện, timestamp và bbox tương ứng để phục vụ
 việc xác nhận thủ công.
+
+## Gateway service
+
+The project ships with a small Express gateway (`gateway/server.js`) that proxies
+frontend requests to the FastAPI service and background ingestion worker.
+
+Set the following environment variables before starting the gateway:
+
+- `PYTHON_URL`: base URL of the Python API that serves recognition, movies and
+  scene endpoints (for example `http://localhost:8000`).
+- `UPLOAD_DIR`: optional path where the gateway stores temporary uploads before
+  forwarding them (defaults to `uploads` inside the project directory).
+- `INGESTION_URL`: optional full URL of the ingestion worker endpoint. When not
+  provided, the gateway forwards upload jobs to `${PYTHON_URL}/ingest`.
+
+Available gateway routes:
+
+- `POST /api/recognize`: forwards image recognition requests.
+- `GET /api/movies`: retrieves the list of movies from the Python service.
+- `POST /api/scene`: requests an alternative scene for the current selection.
+- `POST /api/upload`: accepts a movie file, stores it temporarily and triggers
+  the ingestion pipeline, returning the job identifier or status from the
+  worker.
