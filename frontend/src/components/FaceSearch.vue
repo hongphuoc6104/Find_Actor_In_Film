@@ -159,6 +159,7 @@ const formatDistance = (distance) => {
   return distance
 }
 
+
 const submitSearch = async () => {
   if (!selectedFile.value) {
     errorMessage.value = 'Please select an image file before searching.'
@@ -183,6 +184,12 @@ const submitSearch = async () => {
       payload = data
     } else if (Array.isArray(data?.candidates)) {
       payload = data.candidates
+    } else if (data?.candidates && typeof data.candidates === 'object') {
+      payload = Object.entries(data.candidates)
+        .flatMap(([movieId, items]) => {
+          if (!Array.isArray(items)) return []
+          return items.map((item) => ({ movie_id: movieId, ...item }))
+        })
     } else if (Array.isArray(data?.results)) {
       payload = data.results
     } else if (data) {

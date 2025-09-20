@@ -1,11 +1,12 @@
 import os
+import os
+
 import numpy as np
 import pandas as pd
 from sklearn.cluster import AgglomerativeClustering
 
-from utils.config_loader import load_config
-from tasks.merge_clusters_task import merge_clusters_task
 from tasks.character_task import character_task
+from utils.config_loader import load_config
 
 
 def _cluster_new_embeddings(new_df: pd.DataFrame, existing: pd.DataFrame, cfg: dict) -> pd.DataFrame:
@@ -55,7 +56,7 @@ def update_pipeline(new_parquet: str) -> None:
     """Incrementally update the warehouse with a new parquet file.
 
     The function appends the new data to the embeddings store, clusters only the
-    newly added rows, merges clusters across movies and rebuilds the search index.
+    newly added rows, keeps clusters isolated per movie and rebuilds the search index.
     """
     cfg = load_config()
     storage = cfg["storage"]
@@ -81,8 +82,6 @@ def update_pipeline(new_parquet: str) -> None:
     )
     updated.to_parquet(clusters_path, index=False)
 
-    # Merge clusters across movies and rebuild index
-    merge_clusters_task()
     character_task()
 
 

@@ -33,7 +33,7 @@ def search_actor(
     k: int = 5,
     min_count: int = 0,
     return_emb: bool = False,
-) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
+) -> Union[Dict[str, List[Dict[str, Any]]], Dict[str, Any]]:
     """Find the closest characters in the index based on an image."""
     cfg = load_config()
     emb_cfg = cfg["embedding"]
@@ -87,7 +87,7 @@ def search_actor(
 
     def _search_func(
         query_emb: np.ndarray, top_k: int = k, min_count: int = min_count
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """Search the loaded index using the provided embedding."""
         q = np.asarray(query_emb, dtype="float32")
         if q.ndim == 1:
@@ -101,35 +101,58 @@ def search_actor(
 
         distances, indices = _query_index(index, q, top_k)
 
-        results: List[Dict[str, Any]] = []
+        per_movie: Dict[str, List[Dict[str, Any]]] = {}
+        previews_root = storage_cfg.get("cluster_previews_root", "")
+
         for dist, idx in zip(distances, indices):
-            char_id = str(id_map.get(int(idx), idx))
-            char_info = characters.get(char_id, {})
-            movies = char_info.get("movies", [])
-            count = char_info.get("count", 0)
+            meta = id_map.get(int(idx))
+            if meta is None:
+                continue
+            if isinstance(meta, dict):
+                movie_id = str(meta.get("movie_id"))
+                character_id = str(meta.get("character_id"))
+            else:
+                movie_id = "0"
+                character_id = str(meta)
+
+            movie_data = characters.get(movie_id, {})
+            if isinstance(movie_data, dict) and character_id in movie_data:
+                char_info = movie_data.get(character_id)
+            else:
+                char_info = characters.get(character_id) if movie_id == "0" else None
+            if not char_info:
+                continue
+
+            count = int(char_info.get("count", 0))
             if count < min_count:
                 continue
 
-            rep_image = char_info.get("rep_image", {})
             preview_paths = char_info.get("preview_paths", [])
-            # ensure preview paths are absolute
-            previews_root = storage_cfg.get("cluster_previews_root", "")
-            preview_paths = [
+            normalized_previews = [
                 p if os.path.isabs(p) else os.path.join(previews_root, p)
                 for p in preview_paths
             ]
+            result = {
+                "movie_id": movie_id,
+                "movie": char_info.get("movie"),
+                "character_id": character_id,
+                "distance": float(dist),
+                "count": count,
+                "track_count": int(char_info.get("track_count", count)),
+                "rep_image": char_info.get("rep_image", {}),
+                "preview_paths": normalized_previews,
+                "previews": char_info.get("previews", []),
+                "scenes": char_info.get("scenes", []),
+                "raw_cluster_ids": char_info.get("raw_cluster_ids", []),
+                "movies": [char_info.get("movie")] if char_info.get("movie") else [],
+            }
 
-            results.append(
-                {
-                    "character_id": char_id,
-                    "movies": movies,
-                    "distance": float(dist),
-                    "count": count,
-                    "rep_image": rep_image,
-                    "preview_paths": preview_paths,
-                }
-            )
-        return results
+            per_movie.setdefault(movie_id, []).append(result)
+
+        for movie_results in per_movie.values():
+            movie_results.sort(key=lambda item: item.get("distance", 0.0), reverse=True)
+
+        return per_movie
 
     if return_emb:
         return {

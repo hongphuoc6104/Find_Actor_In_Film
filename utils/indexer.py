@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict, List, Tuple, Any
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 
 from utils.config_loader import load_config
-from utils.vector_utils import _mean_vector, l2_normalize
+from utils.vector_utils import l2_normalize
 
 
 def build_index(characters_json: str, index_path: str) -> None:
@@ -33,36 +33,39 @@ def build_index(characters_json: str, index_path: str) -> None:
     merged_path = storage_cfg.get("clusters_merged_parquet")
 
     vectors: List[np.ndarray] = []
-    char_ids: List[int] = []
+    char_refs: List[Dict[str, str]] = []
 
-    # Nếu có file parquet đã merge, dùng để tính centroid
+    centroid_df = None
     if merged_path and os.path.exists(merged_path):
-        df = pd.read_parquet(merged_path)
+        centroid_df = pd.read_parquet(merged_path)
 
-        def _as_array(value: Any) -> np.ndarray:
-            arr = np.asarray(value, dtype="float32")
-            if arr.ndim == 1:
-                return arr
-            return arr.ravel()
+    def _lookup_centroid(movie_id: str, character_id: str) -> np.ndarray | None:
+        if centroid_df is None or centroid_df.empty:
+            return None
+        mask = (
+            centroid_df["movie_id"].astype(str) == movie_id
+        ) & (centroid_df["character_id"].astype(str) == character_id)
+        rows = centroid_df[mask]
+        if rows.empty:
+            return None
+        value = rows.iloc[0].get("embedding")
+        if value is None:
+            return None
+        arr = np.asarray(value, dtype="float32")
+        if arr.ndim == 1:
+            return arr
+        return arr.reshape(-1)
 
-        column = "centroid" if "centroid" in df.columns else "emb"
-        grouped = (
-            df.groupby("final_character_id")[column].apply(
-                lambda rows: _mean_vector([_as_array(v) for v in rows])
-            )
-        )
-        for char_id in characters.keys():
-            cid = int(char_id)
-            if cid in grouped.index:
-                vectors.append(l2_normalize(grouped.loc[cid]))
-                char_ids.append(cid)
-    else:
-        # fallback: lấy embedding trực tiếp từ JSON nếu có
-        for char_id, info in characters.items():
+    for movie_id, char_map in characters.items():
+        for character_id, info in char_map.items():
             emb = info.get("embedding")
-            if emb is not None:
-                vectors.append(l2_normalize(np.array(emb, dtype="float32")))
-                char_ids.append(int(char_id))
+            if emb is None:
+                emb = _lookup_centroid(movie_id, character_id)
+            if emb is None:
+                continue
+            vector = l2_normalize(np.asarray(emb, dtype="float32"))
+            vectors.append(vector)
+            char_refs.append({"movie_id": str(movie_id), "character_id": str(character_id)})
 
     if not vectors:
         print("[Indexer] Không tìm thấy vector để xây index.")
@@ -107,13 +110,13 @@ def build_index(characters_json: str, index_path: str) -> None:
     map_path = storage_cfg.get("index_map")
     if map_path:
         os.makedirs(os.path.dirname(map_path), exist_ok=True)
-        mapping = {i: cid for i, cid in enumerate(char_ids)}
+        mapping = {i: ref for i, ref in enumerate(char_refs)}
         with open(map_path, "w", encoding="utf-8") as f:
             json.dump(mapping, f, indent=2, ensure_ascii=False)
         print(f"[Indexer] Đã lưu index map vào {map_path}")
 
 
-def _infer_dim(cfg: Dict[str, Any], id_map: Dict[int, int]) -> int:
+def _infer_dim(cfg: Dict[str, Any], id_map: Dict[int, Dict[str, str]]) -> int:
     """Suy ra số chiều embedding để nạp Annoy index."""
     emb_cfg = cfg.get("embedding", {})
     dim = emb_cfg.get("dim") or emb_cfg.get("size")
@@ -125,8 +128,10 @@ def _infer_dim(cfg: Dict[str, Any], id_map: Dict[int, int]) -> int:
     if characters_json and os.path.exists(characters_json):
         with open(characters_json, "r", encoding="utf-8") as f:
             characters = json.load(f)
-        for cid in id_map.values():
-            info = characters.get(str(cid))
+        for meta in id_map.values():
+            movie_id = str(meta.get("movie_id"))
+            character_id = str(meta.get("character_id"))
+            info = characters.get(movie_id, {}).get(character_id)
             if info and info.get("embedding"):
                 return len(info["embedding"])
     raise RuntimeError("Không xác định được số chiều embedding cho Annoy index")
@@ -150,7 +155,16 @@ def load_index() -> Tuple[Any, Dict[int, int]]:
 
     with open(map_path, "r", encoding="utf-8") as f:
         raw_map = json.load(f)
-    id_map: Dict[int, int] = {int(k): int(v) for k, v in raw_map.items()}
+    id_map: Dict[int, Dict[str, str]] = {}
+    for key, value in raw_map.items():
+        idx = int(key)
+        if isinstance(value, dict):
+            movie_id = str(value.get("movie_id"))
+            character_id = str(value.get("character_id"))
+        else:
+            movie_id = "0"
+            character_id = str(value)
+        id_map[idx] = {"movie_id": movie_id, "character_id": character_id}
 
     # Thử đọc FAISS trước
     try:

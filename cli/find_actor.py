@@ -18,7 +18,8 @@ except Exception:  # pragma: no cover - optional dependency
     search_actor = None  # type: ignore
 
 
-def _decide_matches(
+
+def _decide_single_movie(
     matches: List[Dict[str, Any]],
     sim_threshold: float,
     ratio_threshold: float,
@@ -29,32 +30,42 @@ def _decide_matches(
     if not matches:
         return {"recognized": False, "matches": []}
 
-    # 1. Lọc theo sim_threshold (đúng hoàn toàn)
     filtered = [m for m in matches if m.get("distance", 0.0) >= sim_threshold]
     if filtered:
         return {"recognized": True, "matches": filtered}
 
-    # 2. Nếu không đạt ngưỡng đúng, xét cứu vớt trong khoảng [0.2, sim_threshold)
-    rescued = []
-    if matches:
-        first_score = matches[0].get("distance", 0.0)
-        if first_score >= min_rescue_score:
-            rescued.append(matches[0])  # luôn giữ Top-1 nếu ≥ 0.2
-            for i in range(1, len(matches)):
-                curr_score = matches[i].get("distance", 0.0)
-
-                # dừng nếu score < 0.2
-                if curr_score < min_rescue_score:
-                    break
-
-                # dừng nếu chênh lệch quá rescue_gap
-                prev_score = rescued[-1].get("distance", 0.0)
-                if prev_score - curr_score > rescue_gap:
-                    break
-
-                rescued.append(matches[i])
+    rescued: List[Dict[str, Any]] = []
+    first_score = matches[0].get("distance", 0.0)
+    if first_score >= min_rescue_score:
+        rescued.append(matches[0])
+        for i in range(1, len(matches)):
+            curr_score = matches[i].get("distance", 0.0)
+            if curr_score < min_rescue_score:
+                break
+            prev_score = rescued[-1].get("distance", 0.0)
+            if prev_score - curr_score > rescue_gap:
+                break
+            rescued.append(matches[i])
 
     return {"recognized": False, "matches": rescued}
+
+def _decide_matches(
+    matches_by_movie: Dict[str, List[Dict[str, Any]]],
+    sim_threshold: float,
+    ratio_threshold: float,
+    margin_threshold: float,
+) -> Dict[str, Dict[str, Any]]:
+    results: Dict[str, Dict[str, Any]] = {}
+    for movie_id, movie_matches in matches_by_movie.items():
+        decision = _decide_single_movie(
+            movie_matches,
+            sim_threshold,
+            ratio_threshold,
+            margin_threshold,
+        )
+        decision["movie"] = movie_matches[0].get("movie") if movie_matches else None
+        results[movie_id] = decision
+    return results
 
 
 
@@ -101,7 +112,11 @@ def run(
     except Exception as e:
         return {"error": f"Search failed: {e}"}
 
-    return _decide_matches(matches, sim_threshold, ratio_threshold, margin_threshold)
+    decisions = _decide_matches(
+        matches, sim_threshold, ratio_threshold, margin_threshold
+    )
+    recognized = any(info.get("recognized") for info in decisions.values())
+    return {"recognized": recognized, "per_movie": decisions}
 
 
 def main() -> None:
@@ -158,39 +173,40 @@ def main() -> None:
         print(f"Error: {res['error']}")
         return
 
-    matches = res.get("matches", [])
-    recognized = res.get("recognized", False)
+    decisions = res.get("per_movie", {})
+    if not decisions:
+        print("No matches found.")
+        return
 
-    if recognized:
-        print("✅ Recognized match(es):")
-    else:
-        print("⚠️ Unknown – showing rescued suggestions:")
+    for movie_id, info in decisions.items():
+        movie_label = info.get("movie") or f"movie_id={movie_id}"
+        header = "✅ Recognized" if info.get("recognized") else "⚠️ Suggestions"
+        print(f"{header} for {movie_label}:")
 
-    for m in matches:
-        actor_label = (
-            m.get("actor_name")
-            or m.get("character_name")
-            or m.get("character_id", "unknown")
-        )
-        score = m.get("distance", 0.0)
-        movies = ", ".join(m.get("movies", []))
-        print(f"Actor {actor_label} - score: {score:.4f} – xuất hiện trong [{movies}]")
-
-        rep = m.get("rep_image", {})
-        if rep:
-            movie = rep.get("movie", "")
-            frame = rep.get("frame", "")
-            bbox = rep.get("bbox", [])
-            frames_root = storage_cfg.get("frames_root", "")
-            path = (
-                os.path.join(frames_root, movie, frame)
-                if movie and frame
-                else ""
+        for m in info.get("matches", []):
+            actor_label = (
+                m.get("actor_name")
+                or m.get("character_name")
+                or m.get("character_id", "unknown")
             )
-            print(f"  Representative frame: {path} bbox={bbox}")
+            score = m.get("distance", 0.0)
+            print(f"  Actor {actor_label} - score: {score:.4f}")
 
-        for p in m.get("preview_paths", [])[:3]:
-            print(f"    Preview: {p}")
+            rep = m.get("rep_image", {})
+            if rep:
+                movie = rep.get("movie", "")
+                frame = rep.get("frame", "")
+                bbox = rep.get("bbox", [])
+                frames_root = storage_cfg.get("frames_root", "")
+                path = (
+                    os.path.join(frames_root, movie, frame)
+                    if movie and frame
+                    else ""
+                )
+                print(f"    Representative frame: {path} bbox={bbox}")
+
+            for p in m.get("preview_paths", [])[:3]:
+                print(f"      Preview: {p}")
 
 if __name__ == "__main__":
     main()
