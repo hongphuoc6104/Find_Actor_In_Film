@@ -82,7 +82,6 @@ def test_pipeline_creates_index(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "validate_clusters_task", dummy)
     monkeypatch.setattr(pipeline, "pca_task", dummy)
     monkeypatch.setattr(pipeline, "cluster_task", dummy)
-    monkeypatch.setattr(pipeline, "merge_clusters_task", dummy)
     monkeypatch.setattr(pipeline, "preview_clusters_task", dummy)
 
     def fake_build_index(chars_path, index_path):
@@ -92,13 +91,13 @@ def test_pipeline_creates_index(tmp_path, monkeypatch):
             f.write(b"index")
         os.makedirs(os.path.dirname(map_path), exist_ok=True)
         with open(map_path, "w", encoding="utf-8") as f:
-            json.dump({"0": 0}, f)
+            json.dump({"0": {"movie_id": "0", "character_id": "0"}}, f)
     monkeypatch.setattr(indexer, "build_index", fake_build_index)
 
     def fake_character_task():
         os.makedirs(os.path.dirname(storage["characters_json"]), exist_ok=True)
         with open(storage["characters_json"], "w", encoding="utf-8") as f:
-            json.dump({"0": {"embedding": [0], "movies": []}}, f)
+            json.dump({"0": {"0": {"embedding": [0.0], "movie": "movie0", "count": 1}}}, f)
         indexer.build_index(storage["characters_json"], storage["index_path"])
         return storage["characters_json"]
     monkeypatch.setattr(pipeline, "character_task", fake_character_task)

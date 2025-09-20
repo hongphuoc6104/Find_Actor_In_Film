@@ -11,6 +11,26 @@ cv2.imwrite = lambda path, img: True
 cv2.imread = lambda path: np.zeros((5, 5, 3), dtype=np.uint8)
 sys.modules["cv2"] = cv2
 
+dummy_insightface = ModuleType("insightface")
+dummy_app_module = ModuleType("insightface.app")
+class _FallbackFaceAnalysis:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def prepare(self, *args, **kwargs):
+        pass
+
+    def get(self, img):
+        return []
+
+dummy_app_module.FaceAnalysis = _FallbackFaceAnalysis
+sys.modules["insightface"] = dummy_insightface
+sys.modules["insightface.app"] = dummy_app_module
+
+pd_stub = ModuleType("pandas")
+pd_stub.__version__ = "0.0"
+sys.modules.setdefault("pandas", pd_stub)
+
 import utils.search_actor as sa
 
 
@@ -35,13 +55,25 @@ def _setup_env(tmp_path, monkeypatch, rep_image=None):
         "storage": {"characters_json": str(tmp_path / "characters.json")},
     }
     monkeypatch.setattr(sa, "load_config", lambda: cfg)
-    monkeypatch.setattr(sa, "load_index", lambda: (object(), {0: 0}))
+    monkeypatch.setattr(
+        sa, "load_index", lambda: (object(), {0: {"movie_id": "0", "character_id": "0"}})
+    )
     monkeypatch.setattr(sa, "_query_index", lambda idx, e, k: (np.array([0.1]), np.array([0])))
     # ensure search_actor uses our dummy cv2 regardless of prior imports
     monkeypatch.setattr(sa, "cv2", cv2)
-    data = {"0": {"movies": ["movie1"]}}
+
+    data = {
+        "0": {
+            "0": {
+                "movie": "movie1",
+                "count": 1,
+                "embedding": emb.tolist(),
+            }
+        }
+    }
     if rep_image is not None:
-        data["0"]["rep_image"] = rep_image
+        data["0"]["0"]["rep_image"] = rep_image
+
     with open(tmp_path / "characters.json", "w", encoding="utf-8") as f:
         json.dump(data, f)
 
@@ -56,19 +88,23 @@ def test_search_actor_return_emb(monkeypatch, tmp_path):
     assert "embedding" in results
     assert callable(results["search_func"])
     matches = results["search_func"](np.asarray([results["embedding"]], dtype=np.float32))
-    assert matches[0]["character_id"] == "0"
-    assert matches[0]["movies"] == ["movie1"]
+
+    assert "0" in matches
+    assert matches["0"][0]["character_id"] == "0"
+    assert matches["0"][0]["movie"] == "movie1"
 
 
 def test_search_actor_direct(monkeypatch, tmp_path):
     img_path, emb = _setup_env(tmp_path, monkeypatch)
     matches = sa.search_actor(str(img_path), k=1)
-    assert matches[0]["character_id"] == "0"
-    assert matches[0]["movies"] == ["movie1"]
+
+    assert "0" in matches
+    assert matches["0"][0]["character_id"] == "0"
+    assert matches["0"][0]["movie"] == "movie1"
 
 
 def test_search_actor_returns_rep_image(monkeypatch, tmp_path):
     rep = {"movie": "movie1", "frame": "frame1.jpg", "bbox": [1, 2, 3, 4]}
     img_path, emb = _setup_env(tmp_path, monkeypatch, rep_image=rep)
     matches = sa.search_actor(str(img_path), k=1)
-    assert matches[0]["rep_image"] == rep
+    assert matches["0"][0]["rep_image"] == rep

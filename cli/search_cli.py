@@ -3,8 +3,10 @@ import joblib
 import numpy as np
 import os
 
-from utils.search_actor import search_actor
+
+from cli.find_actor import _decide_single_movie
 from utils.config_loader import load_config
+from utils.search_actor import search_actor
 
 
 def main():
@@ -30,22 +32,7 @@ def main():
         default=default_sim_threshold,
         help="Minimum similarity score for a valid match (default from config)",
     )
-    parser.add_argument(
-        "--margin-threshold",
-        type=float,
-        default=default_margin_threshold,
-        help="Minimum margin between top matches (default from config)",
-    )
-    parser.add_argument(
-        "--top-k",
-        type=int,
-        default=default_top_k,
-        help="Number of top matches to retrieve (default from config)",
-    )
-    parser.add_argument(
-        "--min-count",
-        type=int,
-        default=default_min_count,
+@@ -49,71 +50,66 @@ def main():
         help="Minimum occurrence count for characters (default from config)",
     )
     parser.add_argument(
@@ -71,48 +58,43 @@ def main():
 
     # --- Search bằng embedding đã được PCA ---
     top_k = max(2, args.top_k)
-    matches = results["search_func"](emb, top_k=top_k, min_count=args.min_count)  # search_func được trả về từ search_actor
+    matches_by_movie = results["search_func"](
+        emb, top_k=top_k, min_count=args.min_count
+    )
 
-    if not matches:
+    if not matches_by_movie:
         print("No matching actors found.")
         return
 
-    sims = [m.get("distance", 0.0) for m in matches]
-    sim_top1 = sims[0]
-    sim_top2 = sims[1] if len(sims) > 1 else float("-inf")
-    valid_matches = [
-        m for m in matches if m.get("distance", 0.0) >= args.sim_threshold
-    ]
+    for movie_id, matches in matches_by_movie.items():
+        decision = _decide_single_movie(
+            matches,
+            args.sim_threshold,
+            args.ratio_threshold,
+            args.margin_threshold,
+        )
+        movie_label = matches[0].get("movie") if matches else f"movie_id={movie_id}"
+        if not decision["matches"]:
+            print(f"{movie_label}: Unknown")
+            continue
 
-    if sim_top1 < args.sim_threshold:
-        print("Unknown")
-        return
-
-    eps = 1e-8
-    if sim_top1 / max(sim_top2, eps) < args.ratio_threshold:
-        print("Unknown")
-        return
-
-    if (sim_top1 - sim_top2) < args.margin_threshold:
-        if len(valid_matches) <= 1:
-            print("Unknown")
-            return
-        matches_to_print = valid_matches
-    else:
-        matches_to_print = [valid_matches[0]]
-
-    # --- In kết quả ---
-    for res in matches_to_print:
-        char_id = res.get("character_id", "unknown")
-        movies = ", ".join(res.get("movies", []))
-        rep = res.get("rep_image", {})
-        print(f"Character {char_id} - Movies: {movies}")
-        if rep:
-            movie = rep.get("movie", "")
-            frame = rep.get("frame", "")
-            bbox = rep.get("bbox", [])
-            path = os.path.join(frames_root, movie, frame) if movie and frame else ""
-            print(f"  Representative frame: {path} bbox={bbox}")
+        status = "Recognized" if decision["recognized"] else "Suggestions"
+        print(f"{movie_label} – {status}:")
+        for res in decision["matches"]:
+            char_id = res.get("character_id", "unknown")
+            score = res.get("distance", 0.0)
+            print(f"  Character {char_id} - Score: {score:.4f}")
+            rep = res.get("rep_image", {})
+            if rep:
+                movie = rep.get("movie", "")
+                frame = rep.get("frame", "")
+                bbox = rep.get("bbox", [])
+                path = (
+                    os.path.join(frames_root, movie, frame)
+                    if movie and frame
+                    else ""
+                )
+                print(f"    Representative frame: {path} bbox={bbox}")
 
 
 if __name__ == "__main__":

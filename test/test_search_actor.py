@@ -34,9 +34,10 @@ def build_index(chars_path):
         data = json.load(f)
     embeddings = []
     movie_map = []
-    for info in data.values():
-        embeddings.append(info["embedding"])
-        movie_map.append(info["movies"])
+    for movie_chars in data.values():
+        for info in movie_chars.values():
+            embeddings.append(info["embedding"])
+            movie_map.append(info.get("movie"))
     return np.asarray(embeddings, dtype=np.float32), movie_map
 
 
@@ -89,11 +90,11 @@ def test_embedding_and_search(tmp_path, monkeypatch):
     emb_file = os.path.join(storage["embeddings_folder_per_movie"], "movie1.parquet")
     df = pd.read_parquet(emb_file)
     emb_vec = df["emb"].iloc[0].tolist()
-    characters = {"0": {"embedding": emb_vec, "movies": ["movie1"]}}
+    characters = {"0": {"0": {"embedding": emb_vec, "movie": "movie1"}}}
     with open(storage["characters_json"], "w", encoding="utf-8") as f:
         json.dump(characters, f)
 
     # --- Build index and search ---
     index, movie_map = build_index(storage["characters_json"])
     result = search_actor(str(frame_path), dummy_app, index, movie_map)
-    assert "movie1" in result
+    assert result == "movie1"

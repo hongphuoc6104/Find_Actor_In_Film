@@ -29,45 +29,39 @@ def main() -> None:
     frames_root = cfg["storage"].get("frames_root", "")
 
     result = recognize(args.image, top_k=args.top_k)
-    candidates: List[Dict[str, Any]] = result.get("candidates", [])
+    candidates: Dict[str, List[Dict[str, Any]]] = result.get("candidates", {})
 
     if result.get("is_unknown", True):
         print("Unknown face. Showing nearest candidates...")
-        for cand in candidates:
-            movies = ", ".join(cand.get("movies", []))
-            print(f"Candidate {cand['character_id']} - Movies: {movies}")
-            images: List[str] = []
-            rep = cand.get("rep_image")
-            if rep:
-                movie = rep.get("movie")
-                frame = rep.get("frame")
-                if movie and frame:
-                    images.append(os.path.join(frames_root, movie, frame))
-            images.extend(cand.get("preview_paths", []))
-            _display(str(cand["character_id"]), images)
+        for movie_id, movie_candidates in candidates.items():
+            for cand in movie_candidates:
+                movie = cand.get("movie") or movie_id
+                print(f"Candidate {cand['character_id']} - Movie: {movie}")
+                images: List[str] = []
+                rep = cand.get("rep_image")
+                if rep:
+                    rep_movie = rep.get("movie")
+                    frame = rep.get("frame")
+                    if rep_movie and frame:
+                        images.append(os.path.join(frames_root, rep_movie, frame))
+                images.extend(cand.get("preview_paths", []))
+                _display(f"{cand['character_id']}:{movie}", images)
     else:
         print("Recognized face. Showing frames by movie...")
-        for cand in candidates:
-            print(f"Character {cand['character_id']}")
-            images_by_movie: Dict[str, List[str]] = {}
-            # representative image
-            rep = cand.get("rep_image")
-            if rep:
-                movie = rep.get("movie")
-                frame = rep.get("frame")
-                if movie and frame:
-                    path = os.path.join(frames_root, movie, frame)
-                    images_by_movie.setdefault(movie, []).append(path)
-            # group preview paths by movie using real path
-            for p in cand.get("preview_paths", []):
-                real = os.path.realpath(p)
-                parts = real.split(os.sep)
-                if len(parts) >= 2:
-                    movie = parts[-2]
-                    images_by_movie.setdefault(movie, []).append(real)
-            for movie, imgs in images_by_movie.items():
-                print(f"  Movie: {movie}")
-                _display(f"{cand['character_id']}:{movie}", imgs)
+        for movie_id, movie_candidates in candidates.items():
+            movie_label = movie_candidates[0].get("movie") if movie_candidates else movie_id
+            print(f"Movie: {movie_label}")
+            for cand in movie_candidates:
+                print(f"  Character {cand['character_id']}")
+                images: List[str] = []
+                rep = cand.get("rep_image")
+                if rep:
+                    rep_movie = rep.get("movie")
+                    frame = rep.get("frame")
+                    if rep_movie and frame:
+                        images.append(os.path.join(frames_root, rep_movie, frame))
+                images.extend(cand.get("preview_paths", []))
+                _display(f"{cand['character_id']}:{movie_label}", images)
 
 
 if __name__ == "__main__":

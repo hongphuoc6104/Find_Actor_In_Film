@@ -7,7 +7,6 @@ from typing import Any, Dict, List
 from utils.config_loader import load_config
 from utils.search_actor import search_actor
 
-
 def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
     """Recognize a face image using the configured index.
 
@@ -35,7 +34,20 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
     matches: List[Dict[str, Any]] = search_actor(image_path, k=top_k)
     if not matches:
         return {"is_unknown": True, "candidates": []}
+    matches_by_movie = search_actor(image_path, k=top_k)
+    if not matches_by_movie:
+        return {"is_unknown": True, "candidates": {}}
 
     best_score = matches[0].get("distance", 0.0)
+    all_matches: List[Dict[str, Any]] = []
+    for movie_matches in matches_by_movie.values():
+        all_matches.extend(movie_matches)
+
+    if not all_matches:
+        return {"is_unknown": True, "candidates": matches_by_movie}
+
+    all_matches.sort(key=lambda item: item.get("distance", 0.0), reverse=True)
+    best_score = all_matches[0].get("distance", 0.0)
     is_unknown = best_score < threshold
     return {"is_unknown": is_unknown, "candidates": matches}
+    return {"is_unknown": is_unknown, "candidates": matches_by_movie}

@@ -29,17 +29,20 @@ def test_run_recognized(monkeypatch, tmp_path):
         def _search_func(emb, top_k, min_count):
             assert top_k == 20
             assert min_count == 0
-            return [
-                {"character_id": "1", "movies": ["m1"], "distance": 0.9},
-                {"character_id": "2", "movies": ["m2"], "distance": 0.8},
-            ]
+            return {
+                "0": [
+                    {"character_id": "1", "movie": "m1", "distance": 0.9},
+                    {"character_id": "2", "movie": "m1", "distance": 0.8},
+                ]
+            }
         return {"embedding": [0.0, 0.0], "search_func": _search_func}
 
     monkeypatch.setattr(fa, "search_actor", dummy_search_actor)
     res = fa.run(str(img_path), 0.5, 1.1, 0.05)
     assert res["recognized"] is True
-    assert len(res["matches"]) == 2
-    assert [m["character_id"] for m in res["matches"]] == ["1", "2"]
+    assert "0" in res["per_movie"]
+    matches = res["per_movie"]["0"]["matches"]
+    assert [m["character_id"] for m in matches] == ["1", "2"]
 
 
 def test_run_unknown(monkeypatch, tmp_path):
@@ -62,16 +65,19 @@ def test_run_unknown(monkeypatch, tmp_path):
         def _search_func(emb, top_k, min_count):
             assert top_k == 20
             assert min_count == 0
-            return [
-                {"character_id": "1", "movies": [], "distance": 0.4},
-                {"character_id": "2", "movies": [], "distance": 0.39},
-            ]
+            return {
+                "0": [
+                    {"character_id": "1", "movie": "m1", "distance": 0.4},
+                    {"character_id": "2", "movie": "m1", "distance": 0.39},
+                ]
+            }
         return {"embedding": [0.0, 0.0], "search_func": _search_func}
 
     monkeypatch.setattr(fa, "search_actor", dummy_search_actor)
     res = fa.run(str(img_path), 0.5, 1.1, 0.05)
     assert res["recognized"] is False
-    assert len(res["matches"]) == 2
+    assert "0" in res["per_movie"]
+    assert len(res["per_movie"]["0"]["matches"]) == 2
 
 
 def test_run_missing_image(monkeypatch):
@@ -98,20 +104,35 @@ def test_main_merges_movies(monkeypatch, capsys):
         fa.argparse.ArgumentParser, "parse_args", lambda self: args
     )
 
-    matches = [
-        {"character_id": "A", "movies": ["Film 1"], "rep_image": {}},
-        {"character_id": "A", "movies": ["Film 2", "Film 1"], "rep_image": {}},
-    ]
 
     monkeypatch.setattr(
         fa,
         "run",
-        lambda *call_args, **call_kwargs: {"recognized": True, "matches": matches},
+        lambda *call_args, **call_kwargs: {
+            "recognized": True,
+            "per_movie": {
+                "0": {
+                    "movie": "Film 1",
+                    "recognized": True,
+                    "matches": [
+                        {"character_id": "A", "rep_image": {}, "preview_paths": []}
+                    ],
+                },
+                "1": {
+                    "movie": "Film 2",
+                    "recognized": True,
+                    "matches": [
+                        {"character_id": "A", "rep_image": {}, "preview_paths": []}
+                    ],
+                },
+            },
+        },
     )
 
     fa.main()
     output = capsys.readouterr().out
-    assert "Actor A – xuất hiện trong [Film 1, Film 2]" in output
+    assert "✅ Recognized for Film 1" in output
+    assert "✅ Recognized for Film 2" in output
 
 
 def test_main_outputs_suggestions(monkeypatch, capsys):
@@ -131,30 +152,34 @@ def test_main_outputs_suggestions(monkeypatch, capsys):
         fa.argparse.ArgumentParser, "parse_args", lambda self: args
     )
 
-    matches = [
-        {
-            "character_id": "1",
-            "movies": ["Film X"],
-            "distance": 0.4,
-            "preview_paths": ["preview1.jpg"],
-        },
-        {
-            "character_id": "2",
-            "movies": ["Film Y"],
-            "distance": 0.35,
-            "preview_paths": ["preview2.jpg"],
-        },
-    ]
-
     monkeypatch.setattr(
         fa,
         "run",
-        lambda *call_args, **call_kwargs: {"recognized": False, "matches": matches},
+        lambda *call_args, **call_kwargs: {
+            "recognized": False,
+            "per_movie": {
+                "0": {
+                    "movie": "Film X",
+                    "recognized": False,
+                    "matches": [
+                        {
+                            "character_id": "1",
+                            "distance": 0.4,
+                            "preview_paths": ["preview1.jpg"],
+                        },
+                        {
+                            "character_id": "2",
+                            "distance": 0.35,
+                            "preview_paths": ["preview2.jpg"],
+                        },
+                    ],
+                }
+            },
+        },
     )
 
     fa.main()
     output = capsys.readouterr().out
-    assert "Unknown" in output
-    assert "Top suggestions:" in output
-    assert "Character 1 - score: 0.4000 - Movies: Film X" in output
-    assert "Character 2 - score: 0.3500 - Movies: Film Y" in output
+    assert "⚠️ Suggestions for Film X" in output
+    assert "Actor 1 - score: 0.4000" in output
+    assert "Actor 2 - score: 0.3500" in output
