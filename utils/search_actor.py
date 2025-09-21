@@ -30,19 +30,43 @@ def _query_index(index: Any, emb: np.ndarray, k: int) -> tuple[np.ndarray, np.nd
 
 def search_actor(
     image_path: str,
-    k: int = 5,
+    k: int | None = 5,
     min_count: int = 0,
     return_emb: bool = False,
+    *,
+    score_floor: float | None = None,
+    max_results: int | None = None,
 ) -> Union[Dict[str, List[Dict[str, Any]]], Dict[str, Any]]:
-    """Find the closest characters in the index based on an image."""
+    """Find the closest characters in the index based on an image.
+
+    ``score_floor`` and ``max_results`` allow callers to request a wider
+    neighbourhood from the vector index so that all matches above the desired
+    similarity threshold can be considered.
+    """
     cfg = load_config()
     emb_cfg = cfg["embedding"]
     storage_cfg = cfg["storage"]
     pca_cfg = cfg.get("pca", {})
     index_cfg = cfg.get("index", {})
+    search_cfg = cfg.get("search", {})
 
     index, id_map = load_index()
     index_type = str(index_cfg.get("type", "")).lower()
+    is_similarity_index = "ip" in index_type or "cos" in index_type
+
+    default_floor = float(search_cfg.get("min_score", 0.0))
+    floor_threshold = default_floor if score_floor is None else float(score_floor)
+
+    default_max_results = int(
+        search_cfg.get("max_results", search_cfg.get("top_k", 0)) or 0
+    )
+    if k is not None:
+        default_max_results = max(default_max_results, int(k))
+    if max_results is None:
+        base_query_limit = default_max_results if default_max_results > 0 else 50
+    else:
+        base_query_limit = int(max_results)
+    base_query_limit = max(1, base_query_limit)
 
     app = FaceAnalysis(name=emb_cfg["model"], providers=emb_cfg["providers"])
     app.prepare(ctx_id=0, det_size=(640, 640))
@@ -86,7 +110,12 @@ def search_actor(
         characters = json.load(f)
 
     def _search_func(
-        query_emb: np.ndarray, top_k: int = k, min_count: int = min_count
+        query_emb: np.ndarray,
+        top_k: int | None = k,
+        min_count: int = min_count,
+        *,
+        score_floor: float | None = None,
+        max_results: int | None = None,
     ) -> Dict[str, List[Dict[str, Any]]]:
         """Search the loaded index using the provided embedding."""
         q = np.asarray(query_emb, dtype="float32")
@@ -99,12 +128,38 @@ def search_actor(
             norms = np.linalg.norm(q, axis=1, keepdims=True) + 1e-12
             q = q / norms
 
-        distances, indices = _query_index(index, q, top_k)
+        effective_floor = (
+            float(floor_threshold)
+            if score_floor is None
+            else float(score_floor)
+        )
+
+        if max_results is None:
+            effective_limit = base_query_limit
+        else:
+            effective_limit = max(1, int(max_results))
+        if top_k is not None:
+            effective_limit = max(effective_limit, int(top_k))
+
+        distances, indices = _query_index(index, q, effective_limit)
 
         per_movie: Dict[str, List[Dict[str, Any]]] = {}
         previews_root = storage_cfg.get("cluster_previews_root", "")
 
         for dist, idx in zip(distances, indices):
+            score = float(dist)
+            threshold_active = (
+                score_floor is not None
+                or floor_threshold not in (0.0, float("-inf"))
+            )
+            if threshold_active:
+                if is_similarity_index:
+                    if score < effective_floor:
+                        continue
+                else:
+                    if score > effective_floor:
+                        continue
+
             meta = id_map.get(int(idx))
             if meta is None:
                 continue
@@ -136,7 +191,7 @@ def search_actor(
                 "movie_id": movie_id,
                 "movie": char_info.get("movie"),
                 "character_id": character_id,
-                "distance": float(dist),
+                "distance": score,
                 "count": count,
                 "track_count": int(char_info.get("track_count", count)),
                 "rep_image": char_info.get("rep_image", {}),
@@ -151,8 +206,16 @@ def search_actor(
 
         for movie_results in per_movie.values():
             movie_results.sort(key=lambda item: item.get("distance", 0.0), reverse=True)
+            if top_k is not None and len(movie_results) > int(top_k):
+                del movie_results[int(top_k) :]
 
         return per_movie
+
+    floor_argument = (
+        floor_threshold
+        if (score_floor is not None or floor_threshold not in (0.0, float("-inf")))
+        else None
+    )
 
     if return_emb:
         return {
@@ -160,4 +223,9 @@ def search_actor(
             "search_func": _search_func,
         }
 
-    return _search_func(emb, min_count=min_count)
+    return _search_func(
+        emb,
+        min_count=min_count,
+        score_floor=floor_argument,
+        max_results=base_query_limit,
+    )

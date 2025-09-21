@@ -45,53 +45,78 @@ def _normalize_scene(scene: Any) -> Dict[str, Any] | None:
     return None
 
 
+PRESENT_LABEL_VI = "Xuất hiện trong phim"
+NEAR_MATCH_LABEL_VI = "Có nhân vật gần giống"
+
+
 def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
     """Recognize a face image using the configured index.
 
     The return payload is organised per movie and contains metadata required by
-    the API layer to expose preview images and scene navigation.
+    the API layer to expose preview images and scene navigation. Matches are
+    separated into "present" (>= ``present_threshold``) and "near_match"
+    (between ``near_match_threshold`` and ``present_threshold``) buckets; the
+    API returns only the "present" bucket when available and otherwise falls
+    back to the "near_match" bucket.
     """
 
     cfg = load_config()
     search_cfg = cfg.get("search", {})
-    threshold = _as_float(search_cfg.get("threshold", 0.5), 0.5)
-    if top_k is None:
-        top_k = _as_int(search_cfg.get("top_k", 5), 5)
+    present_threshold = _as_float(
+        search_cfg.get("present_threshold", search_cfg.get("threshold", 0.5)), 0.5
+    )
+    near_match_threshold = _as_float(
+        search_cfg.get("near_match_threshold", 0.3), 0.3
+    )
+    min_score = _as_float(search_cfg.get("min_score", near_match_threshold), near_match_threshold)
 
-    matches_by_movie = search_actor(image_path, k=top_k)
+    max_results_cfg = _as_int(
+        search_cfg.get("max_results", search_cfg.get("top_k", 50)), 50
+    )
+    if top_k is not None:
+        max_results_cfg = max(max_results_cfg, _as_int(top_k, max_results_cfg))
+
+    matches_by_movie = search_actor(
+        image_path,
+        k=max_results_cfg,
+        score_floor=min_score,
+        max_results=max_results_cfg,
+    )
     if not matches_by_movie:
         return {"is_unknown": True, "movies": []}
 
-    all_candidates: List[Dict[str, Any]] = []
-    for movie_id, candidates in matches_by_movie.items():
-        if not isinstance(candidates, list):
-            continue
-        for candidate in candidates:
-            if isinstance(candidate, dict):
-                candidate_copy = dict(candidate)
-                candidate_copy["movie_id"] = str(movie_id)
-                all_candidates.append(candidate_copy)
+    best_score = 0.0
+    movies_by_status: Dict[str, Dict[str, Any]] = {"present": {}, "near_match": {}}
 
-    if not all_candidates:
-        return {"is_unknown": True, "movies": []}
-
-    all_candidates.sort(key=lambda item: _as_float(item.get("distance"), 0.0), reverse=True)
-    best_score = _as_float(all_candidates[0].get("distance"), 0.0)
-    is_unknown = best_score < threshold
-
-    movies: List[Dict[str, Any]] = []
     for movie_id, candidates in matches_by_movie.items():
         if not isinstance(candidates, list) or not candidates:
             continue
-
-        movie_name: str | None = None
-        formatted_characters: List[Dict[str, Any]] = []
 
         for candidate in candidates:
             if not isinstance(candidate, dict):
                 continue
 
-            movie_name = movie_name or candidate.get("movie")
+            score = _as_float(candidate.get("distance"), 0.0)
+            if score < near_match_threshold:
+                continue
+
+            status = "present" if score >= present_threshold else "near_match"
+            label = PRESENT_LABEL_VI if status == "present" else NEAR_MATCH_LABEL_VI
+
+            movie_key = str(movie_id)
+            movie_entry = movies_by_status[status].setdefault(
+                movie_key,
+                {
+                    "movie_id": movie_key,
+                    "movie": candidate.get("movie"),
+                    "characters": [],
+                    "match_status": status,
+                    "match_label": label,
+                },
+            )
+            if not movie_entry.get("movie") and candidate.get("movie"):
+                movie_entry["movie"] = candidate.get("movie")
+
             scenes = candidate.get("scenes")
             total_scenes = len(scenes) if isinstance(scenes, list) else 0
             first_scene = None
@@ -99,46 +124,64 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
                 first_scene = _normalize_scene(scenes[0])
             next_cursor = 1 if isinstance(scenes, list) and len(scenes) > 1 else None
 
-            formatted_characters.append(
-                {
-                    "movie_id": str(movie_id),
-                    "movie": candidate.get("movie"),
-                    "character_id": str(candidate.get("character_id", "")),
-                    "score": _as_float(candidate.get("distance"), 0.0),
-                    "distance": _as_float(candidate.get("distance"), 0.0),
-                    "count": _as_int(candidate.get("count")),
-                    "track_count": _as_int(
-                        candidate.get("track_count"),
-                        _as_int(candidate.get("count")),
-                    ),
-                    "rep_image": candidate.get("rep_image"),
-                    "previews": candidate.get("previews") or [],
-                    "preview_paths": candidate.get("preview_paths") or [],
-                    "raw_cluster_ids": candidate.get("raw_cluster_ids") or [],
-                    "movies": candidate.get("movies") or [],
-                    "scene": first_scene,
-                    "scene_index": 0 if first_scene is not None else None,
-                    "scene_cursor": next_cursor,
-                    "next_scene_cursor": next_cursor,
-                    "total_scenes": total_scenes,
-                    "has_more_scenes": next_cursor is not None,
-                }
-            )
-
-        if not formatted_characters:
-            continue
-
-        formatted_characters.sort(key=lambda item: item.get("score", 0.0), reverse=True)
-        movies.append(
-            {
-                "movie_id": str(movie_id),
-                "movie": movie_name,
-                "score": formatted_characters[0].get("score", 0.0),
-                "characters": formatted_characters,
+            formatted_character = {
+                "movie_id": movie_key,
+                "movie": candidate.get("movie"),
+                "character_id": str(candidate.get("character_id", "")),
+                "score": score,
+                "distance": score,
+                "count": _as_int(candidate.get("count")),
+                "track_count": _as_int(
+                    candidate.get("track_count"),
+                    _as_int(candidate.get("count")),
+                ),
+                "rep_image": candidate.get("rep_image"),
+                "previews": candidate.get("previews") or [],
+                "preview_paths": candidate.get("preview_paths") or [],
+                "raw_cluster_ids": candidate.get("raw_cluster_ids") or [],
+                "movies": candidate.get("movies") or [],
+                "scene": first_scene,
+                "scene_index": 0 if first_scene is not None else None,
+                "scene_cursor": next_cursor,
+                "next_scene_cursor": next_cursor,
+                "total_scenes": total_scenes,
+                "has_more_scenes": next_cursor is not None,
+                "match_status": status,
+                "match_label": label,
             }
-        )
+
+            if formatted_character["character_id"]:
+                movie_entry["characters"].append(formatted_character)
+                best_score = max(best_score, score)
+
+    selected_status = "present" if movies_by_status["present"] else "near_match"
+    selected_movies_map = movies_by_status[selected_status]
+
+    if not selected_movies_map:
+        return {"is_unknown": True, "movies": []}
+
+    movies: List[Dict[str, Any]] = []
+    for movie_entry in selected_movies_map.values():
+        characters = movie_entry.get("characters", [])
+        if not characters:
+            continue
+        characters.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+        movie_payload = {
+            "movie_id": movie_entry.get("movie_id"),
+            "movie": movie_entry.get("movie"),
+            "score": characters[0].get("score", 0.0),
+            "characters": characters,
+            "match_status": movie_entry.get("match_status"),
+            "match_label": movie_entry.get("match_label"),
+        }
+        movies.append(movie_payload)
+
+    if not movies:
+        return {"is_unknown": True, "movies": []}
 
     movies.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+
+    is_unknown = best_score < present_threshold
 
     return {
         "is_unknown": is_unknown,

@@ -217,6 +217,8 @@ const normaliseCharacter = (character) => {
       character?.has_more_scenes ?? (nextCursor !== null && nextCursor !== undefined),
     verificationStatus: null,
     decisionHistory: [],
+    match_status: character?.match_status ?? null,
+    match_label: character?.match_label ?? null,
   }
 }
 
@@ -241,6 +243,8 @@ const normaliseMovies = (payload) => {
         movie: movie?.movie ?? null,
         score: normaliseNumber(movie?.score),
         characters,
+        match_status: movie?.match_status ?? null,
+        match_label: movie?.match_label ?? null,
       }
     })
     .filter((movie) => movie.movie_id && movie.characters.length)
@@ -587,3 +591,8 @@ export const useRecognitionStore = () => ({
   applyDecision,
   updateSceneEntry,
 })
+
+export const __test__ = {
+  normaliseCharacter,
+  normaliseMovies,
+}

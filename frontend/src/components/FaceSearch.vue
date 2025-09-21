@@ -47,6 +47,13 @@
               @click="handleSelectMovie(movie.movie_id)"
             >
               <span class="face-search__movie-title">{{ movie.movie || `Phim #${movie.movie_id}` }}</span>
+              <span
+                v-if="movie.match_label"
+                class="face-search__movie-label"
+                :data-match-status="movie.match_status || ''"
+              >
+                {{ movie.match_label }}
+              </span>
               <span class="face-search__movie-score" v-if="movie.score !== null">{{ formatScore(movie.score) }}</span>
               <span class="face-search__movie-progress">
                 {{ movieProgress(movie.movie_id).confirmed }}/{{ movieProgress(movie.movie_id).total || movie.characters.length }} xác nhận
@@ -64,8 +71,22 @@
               <p class="face-search__character-label">
                 Nhân vật: <strong>{{ currentCharacter.character_id }}</strong>
               </p>
+              <p
+                v-if="currentMovie.match_label"
+                class="face-search__movie-match"
+                :data-match-status="currentMovie.match_status || ''"
+              >
+                {{ currentMovie.match_label }}
+              </p>
             </div>
             <div class="face-search__character-meta">
+              <span
+                v-if="currentCharacter.match_label"
+                class="face-search__character-match"
+                :data-match-status="currentCharacter.match_status || ''"
+              >
+                {{ currentCharacter.match_label }}
+              </span>
               <span v-if="currentCharacter.score !== null">Điểm: {{ formatScore(currentCharacter.score) }}</span>
               <span v-if="currentCharacter.count">Số lần xuất hiện: {{ currentCharacter.count }}</span>
             </div>
@@ -80,6 +101,13 @@
               @click="handleSelectCharacter(currentMovie.movie_id, character.character_id)"
             >
               <span class="face-search__character-id">{{ character.character_id }}</span>
+              <span
+                v-if="character.match_label"
+                class="face-search__character-badge"
+                :data-match-status="character.match_status || ''"
+              >
+                {{ character.match_label }}
+              </span>
               <span class="face-search__character-status" v-if="character.verificationStatus === 'confirmed'">✔</span>
               <span class="face-search__character-status" v-else-if="character.verificationStatus === 'rejected'">✖</span>
             </button>
@@ -467,6 +495,31 @@ button.secondary {
 .face-search__movie-title {
   font-weight: 600;
 }
+
+.face-search__movie-label,
+.face-search__movie-match,
+.face-search__character-match {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #0f766e;
+}
+
+.face-search__character-badge {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-top: 0.15rem;
+  color: #0f766e;
+}
+
+.face-search__movie-label[data-match-status='near_match'],
+.face-search__movie-match[data-match-status='near_match'],
+.face-search__character-match[data-match-status='near_match'],
+.face-search__character-badge[data-match-status='near_match'] {
+  color: #b45309;
+}
+
 
 .face-search__movie-score {
   font-size: 0.85rem;

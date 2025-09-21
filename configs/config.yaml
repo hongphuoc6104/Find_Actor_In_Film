@@ -93,5 +93,9 @@ logging:
   mlflow_experiment: "face_discovery_mvp"
 
 search:
-  threshold: 0.45
-  top_k: 5
+  present_threshold: 0.5      # điểm >= giá trị này được xem là "Xuất hiện trong phim"
+  near_match_threshold: 0.3    # điểm từ giá trị này tới dưới present_threshold là "Có nhân vật gần giống"
+  min_score: 0.3               # ngưỡng thấp nhất để giữ kết quả khi truy vấn index (đảm bảo >=30%)
+  max_results: 120             # số lượng hàng xóm tối đa lấy từ index để bao phủ tất cả kết quả >= min_score
+  threshold: 0.45              # giữ lại cho tương thích cũ (ví dụ CLI)
+  top_k: 5                     # tùy chọn cũ; được dùng làm fallback nếu max_results không thiết lập
