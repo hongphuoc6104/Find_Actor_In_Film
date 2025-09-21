@@ -8,9 +8,35 @@
     <div class="scene-viewer__content" :class="{ 'scene-viewer__content--loading': isLoading }">
       <div v-if="isLoading" class="scene-viewer__loading">Đang tải cảnh…</div>
       <template v-else>
-        <div v-if="sceneImage" class="scene-viewer__frame">
+        <div
+          v-if="sceneClip"
+          class="scene-viewer__frame scene-viewer__frame--video"
+        >
+          <video
+            ref="videoRef"
+            class="scene-viewer__video"
+            :src="sceneClip"
+            controls
+            @loadedmetadata="onVideoLoadedMetadata"
+            @loadeddata="onVideoLoadedMetadata"
+            @timeupdate="onVideoTimeUpdate"
+            @seeked="onVideoTimeUpdate"
+          />
+          <div
+            v-for="(box, index) in overlayBoxes"
+            :key="`video-box-${index}`"
+            class="scene-viewer__bbox"
+            :style="box"
+          />
+        </div>
+        <div v-else-if="sceneImage" class="scene-viewer__frame">
           <img :src="sceneImage" alt="Khung hình đề xuất" @load="onImageLoad" />
-          <div v-for="(box, index) in overlayBoxes" :key="index" class="scene-viewer__bbox" :style="box" />
+          <div
+            v-for="(box, index) in overlayBoxes"
+            :key="`image-box-${index}`"
+            class="scene-viewer__bbox"
+            :style="box"
+          />
         </div>
         <p v-else class="scene-viewer__placeholder">Không có cảnh nào để hiển thị.</p>
       </template>
@@ -26,7 +52,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 
 const props = defineProps({
   scene: {
@@ -52,16 +78,56 @@ const props = defineProps({
 })
 
 const imageSize = reactive({ width: 0, height: 0 })
+const videoSize = reactive({ width: 0, height: 0 })
+const videoRef = ref(null)
+const videoTime = ref(0)
+
+const parseDimension = (value) => {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : 0
+}
 
 const resetImageSize = () => {
   imageSize.width = 0
   imageSize.height = 0
 }
 
+const resetVideoState = () => {
+  videoSize.width = parseDimension(props.scene?.width)
+  videoSize.height = parseDimension(props.scene?.height)
+  videoTime.value = 0
+  if (videoRef.value) {
+    try {
+      videoRef.value.pause()
+      videoRef.value.currentTime = 0
+      videoRef.value.load()
+    } catch (error) {
+      // ignore reset errors for browsers without media support
+    }
+  }
+}
+
+const sceneClip = computed(() => {
+  if (!props.scene) {
+    return ''
+  }
+  const clip =
+    props.scene.clip || props.scene.clip_url || props.scene.clipPath || props.scene.clip_path
+  return typeof clip === 'string' ? clip : ''
+})
+
 watch(
   () => props.scene,
   () => {
     resetImageSize()
+    resetVideoState()
+  },
+)
+
+watch(
+  () => sceneClip.value,
+  () => {
+    resetVideoState()
   },
 )
 
@@ -69,13 +135,8 @@ const sceneImage = computed(() => {
   if (!props.scene) {
     return ''
   }
-  return (
-    props.scene.frame_url ||
-    props.scene.frame ||
-    props.scene.image ||
-    props.scene.preview_image ||
-    ''
-  )})
+  return props.scene.frame || props.scene.image || props.scene.preview_image || ''
+})
 
 const sceneIndexLabel = computed(() => {
   if (!props.meta) {
@@ -140,18 +201,87 @@ const rawBoxes = computed(() => {
   return boxes.map(toBox).filter(Boolean)
 })
 
+const timelineEntries = computed(() => {
+  if (!props.scene || !Array.isArray(props.scene.timeline)) {
+    return []
+  }
+  return props.scene.timeline
+    .map((entry) => (entry && typeof entry === 'object' ? entry : null))
+    .filter(Boolean)
+})
+
+const clipFps = computed(() => {
+  const value = Number(props.scene?.clip_fps)
+  return Number.isFinite(value) && value > 0 ? value : null
+})
+
+const activeTimelineEntry = computed(() => {
+  const timeline = timelineEntries.value
+  if (!timeline.length) {
+    return null
+  }
+  if (!sceneClip.value) {
+    return timeline[0]
+  }
+
+  const fps = clipFps.value
+  const epsilon = fps ? 1 / fps : 0.05
+  const current = videoTime.value ?? 0
+
+  let candidate = timeline[0]
+  timeline.forEach((entry, index) => {
+    let offset = Number(
+      entry?.clip_offset ?? entry?.offset ?? entry?.relative_time ?? entry?.timestamp,
+    )
+    if (!Number.isFinite(offset)) {
+      offset = fps ? index / fps : index * epsilon
+    }
+    if (offset <= current + epsilon) {
+      candidate = entry
+    }
+  })
+
+  return candidate
+})
+
+const activeBoxes = computed(() => {
+  if (sceneClip.value && activeTimelineEntry.value) {
+    const entry = activeTimelineEntry.value
+    const boxes = []
+    if (Array.isArray(entry.boxes)) {
+      boxes.push(...entry.boxes)
+    }
+    if (entry.bbox) {
+      boxes.push(entry.bbox)
+    }
+    return boxes.map(toBox).filter(Boolean)
+  }
+  return rawBoxes.value
+})
+
+const baseDimensions = computed(() => {
+  if (sceneClip.value) {
+    const width = videoSize.width || parseDimension(props.scene?.width)
+    const height = videoSize.height || parseDimension(props.scene?.height)
+    return { width, height }
+  }
+  const width = imageSize.width || parseDimension(props.scene?.width)
+  const height = imageSize.height || parseDimension(props.scene?.height)
+  return { width, height }
+})
+
 const overlayBoxes = computed(() => {
-  if (!rawBoxes.value.length || !sceneImage.value) {
+  const boxes = activeBoxes.value
+  if (!boxes.length) {
     return []
   }
 
-  const width = imageSize.width || Number(props.scene?.width) || 0
-  const height = imageSize.height || Number(props.scene?.height) || 0
+  const { width, height } = baseDimensions.value
   if (!width || !height) {
     return []
   }
 
-  return rawBoxes.value.map((box) => ({
+  return boxes.map((box) => ({
     left: `${Math.max((box.x / width) * 100, 0)}%`,
     top: `${Math.max((box.y / height) * 100, 0)}%`,
     width: `${Math.min((box.width / width) * 100, 100)}%`,
@@ -194,9 +324,14 @@ const sceneDetails = computed(() => {
       details.push({ label: 'Timestamp', value: formatted })
     }
   }
-  const frameLabel = props.scene.frame_name || props.scene.frame
-  if (frameLabel) {
-    details.push({ label: 'Khung hình', value: frameLabel })
+  if (props.scene.frame) {
+    details.push({ label: 'Khung hình', value: props.scene.frame })
+  }
+  if (sceneClip.value) {
+    const clipDuration = formatTimestamp(Number(props.scene?.duration))
+    if (clipDuration) {
+      details.push({ label: 'Độ dài clip', value: clipDuration })
+    }
   }
   if (
     props.scene.det_score !== undefined &&
@@ -221,6 +356,26 @@ const onImageLoad = (event) => {
     imageSize.width = naturalWidth
     imageSize.height = naturalHeight
   }
+}
+
+const onVideoLoadedMetadata = (event) => {
+  const video = event?.target ?? videoRef.value
+  if (!video) {
+    return
+  }
+  if (video.videoWidth && video.videoHeight) {
+    videoSize.width = video.videoWidth
+    videoSize.height = video.videoHeight
+  }
+  videoTime.value = video.currentTime ?? 0
+}
+
+const onVideoTimeUpdate = (event) => {
+  const video = event?.target ?? videoRef.value
+  if (!video) {
+    return
+  }
+  videoTime.value = video.currentTime ?? 0
 }
 </script>
 
@@ -276,7 +431,8 @@ const onImageLoad = (event) => {
   height: 100%;
 }
 
-.scene-viewer__frame img {
+.scene-viewer__frame img,
+.scene-viewer__frame video {
   display: block;
   width: 100%;
   height: 100%;

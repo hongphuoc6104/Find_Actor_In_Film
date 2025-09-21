@@ -40,6 +40,22 @@ def _resolve_previews_root() -> Path | None:
 
     return previews_root
 
+def _resolve_scene_clips_root() -> Path | None:
+    """Return the absolute path configured for generated scene clips."""
+
+    storage_cfg = load_config().get("storage", {})
+    raw_root = storage_cfg.get("scene_clips_root")
+    if not raw_root:
+        return None
+
+    clips_root = Path(raw_root)
+    if not clips_root.is_absolute():
+        clips_root = PROJECT_ROOT / clips_root
+
+    return clips_root
+
+
+
 def _resolve_frames_root() -> Path | None:
     """Return the absolute path configured for raw video frames."""
 

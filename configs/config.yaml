@@ -13,6 +13,7 @@ storage:
   warehouse_noise: "warehouse/parquet/noise.parquet"
   clusters_merged_parquet: "warehouse/parquet/clusters_merged.parquet"
   cluster_previews_root: "warehouse/cluster_previews"
+  scene_clips_root: "warehouse/scene_clips"
 
   characters_json: "warehouse/characters.json"
   pca_model: "models/pca_model.joblib"
