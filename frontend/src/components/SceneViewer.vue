@@ -69,8 +69,13 @@ const sceneImage = computed(() => {
   if (!props.scene) {
     return ''
   }
-  return props.scene.frame || props.scene.image || props.scene.preview_image || ''
-})
+  return (
+    props.scene.frame_url ||
+    props.scene.frame ||
+    props.scene.image ||
+    props.scene.preview_image ||
+    ''
+  )})
 
 const sceneIndexLabel = computed(() => {
   if (!props.meta) {
@@ -189,8 +194,9 @@ const sceneDetails = computed(() => {
       details.push({ label: 'Timestamp', value: formatted })
     }
   }
-  if (props.scene.frame) {
-    details.push({ label: 'Khung hình', value: props.scene.frame })
+  const frameLabel = props.scene.frame_name || props.scene.frame
+  if (frameLabel) {
+    details.push({ label: 'Khung hình', value: frameLabel })
   }
   if (
     props.scene.det_score !== undefined &&

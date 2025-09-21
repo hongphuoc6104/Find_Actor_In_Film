@@ -21,6 +21,7 @@ from utils.config_loader import load_config
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PREVIEWS_ROUTE = "/previews"
+FRAMES_ROUTE = "/frames"
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,20 @@ def _resolve_previews_root() -> Path | None:
         previews_root = PROJECT_ROOT / previews_root
 
     return previews_root
+
+def _resolve_frames_root() -> Path | None:
+    """Return the absolute path configured for raw video frames."""
+
+    storage_cfg = load_config().get("storage", {})
+    raw_root = storage_cfg.get("frames_root")
+    if not raw_root:
+        return None
+
+    frames_root = Path(raw_root)
+    if not frames_root.is_absolute():
+        frames_root = PROJECT_ROOT / frames_root
+
+    return frames_root
 
 
 def _resolve_characters_path() -> Path:
@@ -158,7 +173,7 @@ def _get_character(movie_id: str, character_id: str) -> Dict[str, Any] | None:
     entry = movie_map.get(str(character_id))
     return entry if isinstance(entry, dict) else None
 
-
+FRAMES_ROOT = _resolve_frames_root()
 PREVIEWS_ROOT = _resolve_previews_root()
 
 app = FastAPI(title="Find Actor in Film API")
@@ -176,6 +191,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+if FRAMES_ROOT:
+    FRAMES_ROOT.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        FRAMES_ROUTE,
+        StaticFiles(directory=str(FRAMES_ROOT)),
+        name="frames",
+    )
+
+
 if PREVIEWS_ROOT:
     PREVIEWS_ROOT.mkdir(parents=True, exist_ok=True)
     app.mount(
@@ -189,7 +213,7 @@ def _build_preview_url(path: str) -> str:
     """Convert an absolute preview path into an API URL."""
 
     if PREVIEWS_ROOT is None:
-        return path
+        return str(path)
 
     preview_path = Path(path)
     if not preview_path.is_absolute():
@@ -198,12 +222,120 @@ def _build_preview_url(path: str) -> str:
     try:
         relative = preview_path.relative_to(PREVIEWS_ROOT)
     except ValueError:
-        return path
+        return str(path)
 
     return f"{PREVIEWS_ROUTE.rstrip('/')}/{relative.as_posix()}"
 
 
-def _convert_scene_entry(scene: Any) -> Any:
+def _build_frame_url(path: Path | str) -> str:
+    """Convert an absolute frame path into an API URL."""
+
+    if FRAMES_ROOT is None:
+        return str(path)
+
+    frame_path = Path(path)
+    if not frame_path.is_absolute():
+        frame_path = FRAMES_ROOT / frame_path
+
+    try:
+        relative = frame_path.relative_to(FRAMES_ROOT)
+    except ValueError:
+        return str(path)
+
+    return f"{FRAMES_ROUTE.rstrip('/')}/{relative.as_posix()}"
+
+
+def _guess_movie_name(*sources: Any) -> str | None:
+    """Best-effort extraction of a movie identifier from payloads."""
+
+    movie_keys = (
+        "movie",
+        "movie_folder",
+        "movie_name",
+        "movie_title",
+        "movie_slug",
+    )
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in movie_keys:
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return value
+
+    return None
+
+
+def _url_for_path(path: Path) -> str | None:
+    """Map a filesystem path to a mounted static URL if possible."""
+
+    if FRAMES_ROOT is not None:
+        try:
+            path.relative_to(FRAMES_ROOT)
+        except ValueError:
+            pass
+        else:
+            if path.is_file():
+                return _build_frame_url(path)
+
+    if PREVIEWS_ROOT is not None:
+        try:
+            path.relative_to(PREVIEWS_ROOT)
+        except ValueError:
+            pass
+        else:
+            if path.is_file():
+                return _build_preview_url(path)
+
+    return None
+
+
+def _resolve_scene_frame_url(frame: Any, movie: str | None) -> str | None:
+    """Resolve the best accessible URL for a scene frame."""
+
+    if not isinstance(frame, str):
+        return None
+
+    frame_str = frame.strip()
+    if not frame_str:
+        return None
+
+    if frame_str.startswith(("http://", "https://")):
+        return frame_str
+
+    if frame_str.startswith(FRAMES_ROUTE) or frame_str.startswith(PREVIEWS_ROUTE):
+        return frame_str
+
+    frame_path = Path(frame_str)
+
+    candidates: List[Path] = []
+
+    if frame_path.is_absolute():
+        candidates.append(frame_path)
+    else:
+        if FRAMES_ROOT is not None:
+            if movie:
+                candidates.append(FRAMES_ROOT / movie / frame_path)
+            candidates.append(FRAMES_ROOT / frame_path)
+        if PREVIEWS_ROOT is not None:
+            candidates.append(PREVIEWS_ROOT / frame_path)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        # Using resolve() here would raise if parents are missing; avoid that.
+        candidate_path = candidate
+        if candidate_path in seen:
+            continue
+        seen.add(candidate_path)
+        url = _url_for_path(candidate_path)
+        if url:
+            return url
+
+    return None
+
+
+def _convert_scene_entry(scene: Any, *, movie: str | None = None) -> Any:
     """Normalise and convert scene metadata for API responses."""
 
     if scene is None:
@@ -216,9 +348,33 @@ def _convert_scene_entry(scene: Any) -> Any:
             return scene
 
     converted = scene.copy()
-    frame = converted.get("frame")
-    if isinstance(frame, str) and frame:
-        converted["frame"] = _build_preview_url(frame)
+
+    frame_value = converted.get("frame")
+    if isinstance(frame_value, str) and frame_value:
+        converted.setdefault("frame_name", frame_value)
+
+    movie_hint = _guess_movie_name(converted)
+    if movie_hint is None and movie:
+        movie_hint = movie
+
+    frame_url = _resolve_scene_frame_url(frame_value, movie_hint)
+
+    preview_urls: List[str] = []
+    for key in ("image", "preview_image", "annotated_image", "thumbnail"):
+        value = converted.get(key)
+        if isinstance(value, str) and value:
+            preview_url = _build_preview_url(value)
+            converted[key] = preview_url
+            preview_urls.append(preview_url)
+
+    if frame_url:
+        converted["frame"] = frame_url
+        converted["frame_url"] = frame_url
+    else:
+        fallback_url = next((url for url in preview_urls if url), None)
+        if fallback_url:
+            converted["frame"] = fallback_url
+            converted["frame_url"] = fallback_url
 
     return converted
 
@@ -241,6 +397,7 @@ def _convert_candidate_media(candidate: Any) -> Any:
         return candidate
 
     converted = candidate.copy()
+    movie_hint = _guess_movie_name(converted)
 
     preview_paths = converted.get("preview_paths")
     if isinstance(preview_paths, list):
@@ -258,16 +415,21 @@ def _convert_candidate_media(candidate: Any) -> Any:
 
     rep_image = converted.get("rep_image")
     if isinstance(rep_image, dict):
-        converted["rep_image"] = _convert_scene_entry(rep_image)
+        rep_movie = _guess_movie_name(rep_image) or movie_hint
+        converted["rep_image"] = _convert_scene_entry(rep_image, movie=rep_movie)
+    elif isinstance(rep_image, str):
+        converted["rep_image"] = _convert_scene_entry(rep_image, movie=movie_hint)
 
     scene = converted.get("scene")
     if isinstance(scene, dict) or isinstance(scene, str):
-        converted["scene"] = _convert_scene_entry(scene)
+        converted["scene"] = _convert_scene_entry(scene, movie=movie_hint)
 
     scenes = converted.get("scenes")
     if isinstance(scenes, list):
         converted["scenes"] = [
-            _convert_scene_entry(item) if isinstance(item, dict) else item
+            _convert_scene_entry(item, movie=movie_hint)
+            if isinstance(item, (dict, str))
+            else item
             for item in scenes
         ]
 
@@ -281,6 +443,7 @@ def _convert_preview_paths(payload: Dict[str, Any]) -> Dict[str, Any]:
         return payload
 
     converted = payload.copy()
+    movie_hint = _guess_movie_name(converted)    
 
     movies = converted.get("movies")
     if isinstance(movies, list):
@@ -307,7 +470,7 @@ def _convert_preview_paths(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     scene = converted.get("scene")
     if isinstance(scene, dict) or isinstance(scene, str):
-        converted["scene"] = _convert_scene_entry(scene)
+        converted["scene"] = _convert_scene_entry(scene, movie=movie_hint)
 
     return converted
 
@@ -369,7 +532,8 @@ async def scene_endpoint(request: SceneRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Scene cursor out of range")
 
     scene_raw = scenes[cursor]
-    scene_payload = _convert_scene_entry(scene_raw)
+    movie_hint = _guess_movie_name(character)
+    scene_payload = _convert_scene_entry(scene_raw, movie=movie_hint)    
     next_cursor = cursor + 1 if cursor + 1 < len(scenes) else None
 
     return {
