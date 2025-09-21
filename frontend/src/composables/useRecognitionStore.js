@@ -98,6 +98,43 @@ const normaliseNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+const ensureFrameMetadata = (entry) => {
+  if (!entry || typeof entry !== 'object') {
+    return entry ?? null
+  }
+
+  const copy = { ...entry }
+
+  if (Array.isArray(entry.timeline)) {
+    copy.timeline = entry.timeline.map((item) =>
+      item && typeof item === 'object' ? ensureFrameMetadata(item) : item,
+    )
+  }
+
+  const rawFrame =
+    typeof entry.frame === 'string' && entry.frame ? entry.frame : ''
+  const explicitUrl =
+    typeof entry.frame_url === 'string' && entry.frame_url ? entry.frame_url : ''
+  const frameUrl = explicitUrl || rawFrame
+
+  if (frameUrl) {
+    copy.frame_url = frameUrl
+    copy.frame = frameUrl
+  }
+
+  const frameLabelSource =
+    typeof entry.frame_name === 'string' && entry.frame_name
+      ? entry.frame_name
+      : rawFrame || explicitUrl
+
+  if (frameLabelSource) {
+    const parts = String(frameLabelSource).split(/[\\/]/)
+    copy.frame_name = parts[parts.length - 1] || frameLabelSource
+  }
+
+  return copy
+}
+
 const buildProgressMessage = () => {
   if (!state.movies.length) {
     return defaultInfoMessage
@@ -135,6 +172,22 @@ const normaliseCharacter = (character) => {
   const nextCursor =
     character?.next_scene_cursor ?? character?.scene_cursor ?? null
 
+  const repImage =
+    character?.rep_image && typeof character?.rep_image === 'object'
+      ? ensureFrameMetadata(character.rep_image)
+      : character?.rep_image ?? null
+
+  const previews = Array.isArray(character?.previews)
+    ? character.previews.map((item) =>
+        item && typeof item === 'object' ? ensureFrameMetadata(item) : item,
+      )
+    : []
+
+  const sceneEntry =
+    character?.scene && typeof character?.scene === 'object'
+      ? ensureFrameMetadata(character.scene)
+      : character?.scene ?? null
+
   return {
     movie_id: String(character?.movie_id ?? ''),
     movie: character?.movie ?? null,
@@ -146,8 +199,8 @@ const normaliseCharacter = (character) => {
       character?.track_count,
       normaliseNumber(character?.count),
     ),
-    rep_image: character?.rep_image ?? null,
-    previews: Array.isArray(character?.previews) ? character.previews : [],
+    rep_image: repImage,
+    previews,
     preview_paths: Array.isArray(character?.preview_paths)
       ? character.preview_paths
       : [],
@@ -155,7 +208,7 @@ const normaliseCharacter = (character) => {
       ? character.raw_cluster_ids
       : [],
     movies: Array.isArray(character?.movies) ? character.movies : [],
-    scene: character?.scene ?? null,
+    scene: sceneEntry,
     scene_index:
       character?.scene_index !== undefined ? character.scene_index : null,
     next_scene_cursor: nextCursor,
@@ -204,12 +257,17 @@ const updateSceneEntry = (payload) => {
     return
   }
 
+  const sceneData =
+    payload?.scene && typeof payload.scene === 'object'
+      ? ensureFrameMetadata(payload.scene)
+      : payload?.scene ?? null
+
   const entry = {
     movie_id: movieId,
     character_id: characterId,
     scene_index:
       payload.scene_index !== undefined ? payload.scene_index : null,
-    scene: payload.scene ?? null,
+    scene: sceneData,
     next_cursor:
       payload.next_cursor !== undefined ? payload.next_cursor : null,
     total_scenes:

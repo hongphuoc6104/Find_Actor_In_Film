@@ -20,10 +20,26 @@ from services.recognition import recognize
 from utils.config_loader import load_config
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FRAMES_ROUTE = "/frames"
 PREVIEWS_ROUTE = "/previews"
 CLIPS_ROUTE = "/clips"
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_frames_root() -> Path | None:
+    """Return the absolute path configured for extracted frames."""
+
+    storage_cfg = load_config().get("storage", {})
+    raw_root = storage_cfg.get("frames_root")
+    if not raw_root:
+        return None
+
+    frames_root = Path(raw_root)
+    if not frames_root.is_absolute():
+        frames_root = PROJECT_ROOT / frames_root
+
+    return frames_root
 
 
 def _resolve_previews_root() -> Path | None:
@@ -175,6 +191,7 @@ def _get_character(movie_id: str, character_id: str) -> Dict[str, Any] | None:
     return entry if isinstance(entry, dict) else None
 
 
+FRAMES_ROOT = _resolve_frames_root()
 PREVIEWS_ROOT = _resolve_previews_root()
 SCENE_CLIPS_ROOT = _resolve_scene_clips_root()
 
@@ -192,6 +209,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if FRAMES_ROOT:
+    FRAMES_ROOT.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        FRAMES_ROUTE,
+        StaticFiles(directory=str(FRAMES_ROOT)),
+        name="frames",
+    )
 
 if PREVIEWS_ROOT:
     PREVIEWS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -228,6 +253,66 @@ def _build_static_url(path: str, root: Path | None, route: str) -> str:
     return f"{route.rstrip('/')}/{relative.as_posix()}"
 
 
+def _build_frame_url(
+    path: str,
+    *,
+    movie: str | None = None,
+    movie_id: str | int | None = None,
+) -> str:
+    """Convert an extracted frame path into an API URL."""
+
+    if not path:
+        return path
+
+    candidate_path = Path(path)
+    if not candidate_path.is_absolute() and len(candidate_path.parts) == 1:
+        candidate_prefixes = [
+            str(movie).strip() if movie else None,
+            str(movie_id).strip() if movie_id is not None else None,
+        ]
+        for prefix in candidate_prefixes:
+            if prefix:
+                candidate_path = Path(prefix) / candidate_path
+                break
+
+    path_str = (
+        str(candidate_path)
+        if candidate_path.is_absolute()
+        else candidate_path.as_posix()
+    )
+    return _build_static_url(path_str, FRAMES_ROOT, FRAMES_ROUTE)
+
+
+def _apply_frame_metadata(
+    payload: Dict[str, Any],
+    *,
+    movie: str | None = None,
+    movie_id: str | int | None = None,
+) -> Dict[str, Any]:
+    """Attach frame filename and URL metadata to ``payload`` in place."""
+
+    if not isinstance(payload, dict):
+        return payload
+
+    effective_movie = payload.get("movie") or movie
+    effective_movie_id = payload.get("movie_id") or movie_id
+
+    frame_value = payload.get("frame")
+    if isinstance(frame_value, str) and frame_value:
+        frame_url = _build_frame_url(
+            frame_value, movie=effective_movie, movie_id=effective_movie_id
+        )
+        payload["frame_url"] = frame_url
+        payload["frame_name"] = Path(frame_value).name
+        payload["frame"] = frame_url
+    else:
+        frame_url = payload.get("frame_url")
+        if isinstance(frame_url, str) and frame_url:
+            payload.setdefault("frame_name", Path(frame_url).name)
+
+    return payload
+
+
 def _build_preview_url(path: str) -> str:
     """Convert an absolute preview path into an API URL."""
 
@@ -240,7 +325,12 @@ def _build_clip_url(path: str) -> str:
     return _build_static_url(path, SCENE_CLIPS_ROOT, CLIPS_ROUTE)
 
 
-def _convert_scene_entry(scene: Any) -> Any:
+def _convert_scene_entry(
+    scene: Any,
+    *,
+    movie: str | None = None,
+    movie_id: str | int | None = None,
+) -> Any:
     """Normalise and convert scene metadata for API responses."""
 
     if scene is None:
@@ -253,9 +343,12 @@ def _convert_scene_entry(scene: Any) -> Any:
             return scene
 
     converted = scene.copy()
-    frame = converted.get("frame")
-    if isinstance(frame, str) and frame:
-        converted["frame"] = _build_preview_url(frame)
+    effective_movie = converted.get("movie") or movie
+    effective_movie_id = converted.get("movie_id") or movie_id
+
+    _apply_frame_metadata(
+        converted, movie=effective_movie, movie_id=effective_movie_id
+    )
 
     clip_source = converted.get("clip_path") or converted.get("clip")
     if isinstance(clip_source, str) and clip_source:
@@ -264,21 +357,46 @@ def _convert_scene_entry(scene: Any) -> Any:
 
     timeline = converted.get("timeline")
     if isinstance(timeline, list):
-        converted["timeline"] = [
-            dict(item) if isinstance(item, dict) else item for item in timeline
-        ]
+        converted["timeline"] = []
+        for item in timeline:
+            if isinstance(item, dict):
+                item_copy = dict(item)
+                effective_item_movie = item_copy.get("movie") or effective_movie
+                effective_item_movie_id = (
+                    item_copy.get("movie_id") or effective_movie_id
+                )
+                _apply_frame_metadata(
+                    item_copy,
+                    movie=effective_item_movie,
+                    movie_id=effective_item_movie_id,
+                )
+                converted["timeline"].append(item_copy)
+            else:
+                converted["timeline"].append(item)
 
     return converted
 
 
-def _convert_preview_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+def _convert_preview_entry(
+    entry: Dict[str, Any],
+    *,
+    movie: str | None = None,
+    movie_id: str | int | None = None,
+) -> Dict[str, Any]:
     """Convert preview metadata paths to URLs."""
 
     converted = entry.copy()
-    for key in ("preview_image", "annotated_image", "frame", "image", "thumbnail"):
+    effective_movie = converted.get("movie") or movie
+    effective_movie_id = converted.get("movie_id") or movie_id
+
+    for key in ("preview_image", "annotated_image", "image", "thumbnail"):
         value = converted.get(key)
         if isinstance(value, str) and value:
             converted[key] = _build_preview_url(value)
+
+    _apply_frame_metadata(
+        converted, movie=effective_movie, movie_id=effective_movie_id
+    )
     return converted
 
 
@@ -289,6 +407,8 @@ def _convert_candidate_media(candidate: Any) -> Any:
         return candidate
 
     converted = candidate.copy()
+    movie_name = converted.get("movie")
+    movie_identifier = converted.get("movie_id")
 
     preview_paths = converted.get("preview_paths")
     if isinstance(preview_paths, list):
@@ -300,22 +420,34 @@ def _convert_candidate_media(candidate: Any) -> Any:
     previews = converted.get("previews")
     if isinstance(previews, list):
         converted["previews"] = [
-            _convert_preview_entry(item) if isinstance(item, dict) else item
+            _convert_preview_entry(
+                item, movie=movie_name, movie_id=movie_identifier
+            )
+            if isinstance(item, dict)
+            else item
             for item in previews
         ]
 
     rep_image = converted.get("rep_image")
     if isinstance(rep_image, dict):
-        converted["rep_image"] = _convert_scene_entry(rep_image)
+        converted["rep_image"] = _convert_scene_entry(
+            rep_image, movie=movie_name, movie_id=movie_identifier
+        )
 
     scene = converted.get("scene")
     if isinstance(scene, dict) or isinstance(scene, str):
-        converted["scene"] = _convert_scene_entry(scene)
+        converted["scene"] = _convert_scene_entry(
+            scene, movie=movie_name, movie_id=movie_identifier
+        )
 
     scenes = converted.get("scenes")
     if isinstance(scenes, list):
         converted["scenes"] = [
-            _convert_scene_entry(item) if isinstance(item, dict) else item
+            _convert_scene_entry(
+                item, movie=movie_name, movie_id=movie_identifier
+            )
+            if isinstance(item, dict)
+            else item
             for item in scenes
         ]
 
@@ -355,7 +487,12 @@ def _convert_preview_paths(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     scene = converted.get("scene")
     if isinstance(scene, dict) or isinstance(scene, str):
-        converted["scene"] = _convert_scene_entry(scene)
+        converted["scene"] = _convert_scene_entry(
+            scene,
+            movie=converted.get("movie")
+            or converted.get("movie_name"),
+            movie_id=converted.get("movie_id"),
+        )
 
     return converted
 
@@ -417,7 +554,14 @@ async def scene_endpoint(request: SceneRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Scene cursor out of range")
 
     scene_raw = scenes[cursor]
-    scene_payload = _convert_scene_entry(scene_raw)
+    movie_label = (
+        character.get("movie")
+        or character.get("movie_name")
+        or character.get("movie_folder")
+    )
+    scene_payload = _convert_scene_entry(
+        scene_raw, movie=movie_label, movie_id=character.get("movie_id")
+    )
     next_cursor = cursor + 1 if cursor + 1 < len(scenes) else None
 
     return {

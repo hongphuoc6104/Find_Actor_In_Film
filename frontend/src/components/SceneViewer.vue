@@ -135,7 +135,15 @@ const sceneImage = computed(() => {
   if (!props.scene) {
     return ''
   }
-  return props.scene.frame || props.scene.image || props.scene.preview_image || ''
+  const sources = [
+    props.scene.frame_url,
+    props.scene.frame,
+    props.scene.image,
+    props.scene.preview_image,
+    props.scene.thumbnail,
+  ]
+  const source = sources.find((item) => typeof item === 'string' && item)
+  return source || ''
 })
 
 const sceneIndexLabel = computed(() => {
@@ -306,6 +314,14 @@ const formatTimestamp = (timestamp) => {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
+const extractFileName = (value) => {
+  if (!value || typeof value !== 'string') {
+    return ''
+  }
+  const segments = value.split(/[\\/]/)
+  return segments[segments.length - 1] || value
+}
+
 const sceneDetails = computed(() => {
   if (!props.scene) {
     return []
@@ -324,8 +340,16 @@ const sceneDetails = computed(() => {
       details.push({ label: 'Timestamp', value: formatted })
     }
   }
-  if (props.scene.frame) {
-    details.push({ label: 'Khung hình', value: props.scene.frame })
+  const frameLabel =
+    typeof props.scene.frame_name === 'string' && props.scene.frame_name
+      ? props.scene.frame_name
+      : extractFileName(
+          typeof props.scene.frame === 'string' && props.scene.frame
+            ? props.scene.frame
+            : props.scene.frame_url,
+        )
+  if (frameLabel) {
+    details.push({ label: 'Khung hình', value: frameLabel })
   }
   if (sceneClip.value) {
     const clipDuration = formatTimestamp(Number(props.scene?.duration))
