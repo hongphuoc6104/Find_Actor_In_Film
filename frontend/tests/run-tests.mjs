@@ -4,6 +4,14 @@ import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
 
 import { __test__ } from '../src/composables/useRecognitionStore.js'
+import {
+  collectBoxesFromScene,
+  collectBoxesFromTimelineEntry,
+  computeOverlayBoxes,
+  pickActiveTimelineEntry,
+  scaleBoxes,
+  toBox,
+} from '../src/utils/sceneTimeline.js'
 
 const { normaliseMovies } = __test__
 
@@ -63,3 +71,54 @@ assert(
 )
 
 console.log('Frontend snapshot tests passed.')
+
+const simpleBox = toBox([10, 20, 30, 60])
+assert.deepEqual(
+  simpleBox,
+  { x: 10, y: 20, width: 20, height: 40 },
+  'toBox should convert array coordinates to box objects',
+)
+
+const sceneBoxes = collectBoxesFromScene({ bbox: [0, 0, 100, 100], boxes: [[10, 10, 60, 90]] })
+assert.equal(sceneBoxes.length, 2, 'Scene-level boxes should merge bbox and boxes array')
+
+const timeline = [
+  { clip_offset: 0, duration: 2.5, bbox: [0, 0, 100, 100] },
+  { clip_offset: 2.5, duration: 2.5, bbox: [50, 50, 150, 150] },
+]
+const selectedEarly = pickActiveTimelineEntry(timeline, 0.6, 2)
+assert.strictEqual(
+  selectedEarly,
+  timeline[0],
+  'Timeline entry before transition should use the first segment',
+)
+const selectedLate = pickActiveTimelineEntry(timeline, 4.9, 2)
+assert.strictEqual(
+  selectedLate,
+  timeline[1],
+  'Timeline selection should advance when clip_offset increases',
+)
+
+const timelineBoxes = collectBoxesFromTimelineEntry(selectedLate)
+assert.equal(timelineBoxes.length, 1, 'Timeline entry should expose bbox for overlays')
+const scaled = scaleBoxes(timelineBoxes, 200, 200)
+assert.deepEqual(
+  scaled[0],
+  { left: '25%', top: '25%', width: '50%', height: '50%' },
+  'Scaled boxes should respect relative dimensions',
+)
+
+const overlay = computeOverlayBoxes(
+  { timeline, clip_fps: 2 },
+  200,
+  200,
+  4.9,
+)
+assert.equal(overlay.length, 1, 'Overlay helper should honour active timeline entries')
+assert.equal(
+  overlay[0].left,
+  '25%',
+  'Overlay helper should convert boxes to CSS percentages',
+)
+
+console.log('Scene timeline utility tests passed.')

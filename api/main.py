@@ -352,8 +352,10 @@ def _convert_scene_entry(
 
     clip_source = converted.get("clip_path") or converted.get("clip")
     if isinstance(clip_source, str) and clip_source:
+        clip_url = _build_clip_url(clip_source)
         converted["clip_path"] = clip_source
-        converted["clip"] = _build_clip_url(clip_source)
+        converted["clip"] = clip_url
+        converted["clip_url"] = clip_url
 
     timeline = converted.get("timeline")
     if isinstance(timeline, list):

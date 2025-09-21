@@ -17,7 +17,8 @@ from tasks.filter_clusters_task import filter_clusters_task
 
 
 DEFAULT_CLIP_FPS = 8.0
-
+MIN_CLIP_DURATION = 5.0
+MAX_CLIP_DURATION = 10.0
 
 def _frame_to_int(frame_name: Any) -> int:
     base = os.path.splitext(str(frame_name))[0]
@@ -126,6 +127,25 @@ def _prepare_track_timeline(
 
     return timeline, frame_records
 
+def _select_clip_frames(
+    frame_records: List[Tuple[int, str]], fps_value: float
+) -> List[Tuple[int, str]]:
+    """Select a contiguous window of frames that fits within the target duration."""
+
+    if not frame_records:
+        return []
+
+    effective_fps = fps_value if fps_value and fps_value > 0 else DEFAULT_CLIP_FPS
+    min_frames = max(1, int(round(MIN_CLIP_DURATION * effective_fps)))
+    max_frames = max(min_frames, int(round(MAX_CLIP_DURATION * effective_fps)))
+
+    if len(frame_records) <= max_frames:
+        return frame_records
+
+    start = max(0, (len(frame_records) - max_frames) // 2)
+    end = start + max_frames
+    return frame_records[start:end]
+
 
 def _export_track_clip(
     frame_records: List[Tuple[int, str]],
@@ -134,12 +154,18 @@ def _export_track_clip(
     character_id: str,
     track_id: Any,
     clip_fps: float | None,
-) -> Tuple[str | None, int | None, int | None, float | None, List[int]]:
+) -> Dict[str, Any]:
     """Persist a short MP4 clip for the provided frames."""
 
     if not clips_root or not frame_records:
-        return None, None, None, None, []
-
+        return {
+            "clip_path": None,
+            "width": None,
+            "height": None,
+            "fps": None,
+            "duration": None,
+            "timeline_indices": [],
+        }
     clips_root_abs = os.path.abspath(clips_root)
     os.makedirs(clips_root_abs, exist_ok=True)
 
@@ -160,9 +186,10 @@ def _export_track_clip(
     width = None
     height = None
     used_indices: List[int] = []
+    selected_records = _select_clip_frames(frame_records, fps_value)
 
     try:
-        for entry_index, frame_path in frame_records:
+        for entry_index, frame_path in selected_records:
             frame = cv2.imread(frame_path)
             if frame is None:
                 continue
@@ -198,11 +225,24 @@ def _export_track_clip(
                 os.remove(output_path)
             except OSError:
                 pass
-        return None, None, None, None, []
-
+        return {
+            "clip_path": None,
+            "width": None,
+            "height": None,
+            "fps": None,
+            "duration": None,
+            "timeline_indices": [],
+        }
     rel_path = os.path.relpath(output_path, clips_root_abs)
-    return rel_path.replace(os.sep, "/"), int(width), int(height), float(fps_value), used_indices
-
+    duration = len(used_indices) / float(fps_value)
+    return {
+        "clip_path": rel_path.replace(os.sep, "/"),
+        "width": int(width),
+        "height": int(height),
+        "fps": float(fps_value),
+        "duration": round(duration, 3),
+        "timeline_indices": used_indices,
+    }
 
 @task(name="Build Character Profiles Task")
 def character_task():
@@ -420,16 +460,11 @@ def character_task():
                         clip_rel_path = None
                         clip_width = None
                         clip_height = None
+                        clip_duration = None
                         used_entry_indices: List[int] = []
 
                         if clips_root_abs and frame_records:
-                            (
-                                clip_rel_path,
-                                clip_width,
-                                clip_height,
-                                clip_fps_result,
-                                used_entry_indices,
-                            ) = _export_track_clip(
+                            clip_export = _export_track_clip(
                                 frame_records,
                                 clips_root_abs,
                                 movie_name,
@@ -437,8 +472,17 @@ def character_task():
                                 track_key,
                                 clip_fps_value,
                             )
-                            if clip_fps_result:
-                                clip_fps_value = clip_fps_result
+                            if clip_export:
+                                clip_rel_path = clip_export.get("clip_path")
+                                clip_width = clip_export.get("width")
+                                clip_height = clip_export.get("height")
+                                clip_duration = clip_export.get("duration")
+                                clip_fps_result = clip_export.get("fps")
+                                used_entry_indices = clip_export.get(
+                                    "timeline_indices", []
+                                )
+                                if clip_fps_result:
+                                    clip_fps_value = float(clip_fps_result)
 
                         if clip_rel_path and used_entry_indices:
                             unique_indices = sorted(dict.fromkeys(used_entry_indices))
@@ -452,6 +496,16 @@ def character_task():
 
                         if not timeline_to_store:
                             continue
+
+                        if (
+                            clip_duration is None
+                            and clip_fps_value
+                            and clip_rel_path
+                        ):
+                            clip_duration = round(
+                                len(timeline_to_store) / float(clip_fps_value), 3
+                            )
+
 
                         if clip_width is None or clip_height is None:
                             sample_path = None
@@ -493,12 +547,18 @@ def character_task():
                             "timeline": timeline_to_store,
                             "frame_count": len(timeline_to_store),
                             "clip_path": clip_rel_path,
-                            "clip_fps": clip_fps_value if clip_rel_path else None,
-                            "duration": round(
-                                len(timeline_to_store) / clip_fps_value, 3
-                            )
-                            if clip_rel_path
+                            "clip_fps": float(clip_fps_value)
+                            if clip_fps_value
                             else None,
+                            "duration": clip_duration
+                            if clip_duration is not None
+                            else (
+                                round(
+                                    len(timeline_to_store) / float(clip_fps_value), 3
+                                )
+                                if clip_fps_value
+                                else None
+                            ),
                             "end_frame": last_entry.get("frame"),
                             "end_frame_index": last_entry.get("frame_index"),
                             "end_timestamp": last_entry.get("timestamp"),

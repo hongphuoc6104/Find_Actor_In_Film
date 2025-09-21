@@ -54,6 +54,14 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 
+import {
+  collectBoxesFromScene,
+  collectBoxesFromTimelineEntry,
+  pickActiveTimelineEntry,
+  scaleBoxes,
+} from '../utils/sceneTimeline.js'
+
+
 const props = defineProps({
   scene: {
     type: Object,
@@ -111,9 +119,15 @@ const sceneClip = computed(() => {
   if (!props.scene) {
     return ''
   }
-  const clip =
-    props.scene.clip || props.scene.clip_url || props.scene.clipPath || props.scene.clip_path
-  return typeof clip === 'string' ? clip : ''
+  const sources = [
+    props.scene.clip_url,
+    props.scene.clip,
+    props.scene.clipUrl,
+    props.scene.clipPath,
+    props.scene.clip_path,
+  ]
+  const clip = sources.find((value) => typeof value === 'string' && value)
+  return clip || ''
 })
 
 watch(
@@ -161,52 +175,8 @@ const sceneIndexLabel = computed(() => {
   return ''
 })
 
-const toBox = (entry) => {
-  if (!entry) {
-    return null
-  }
-  if (Array.isArray(entry) && entry.length >= 4) {
-    const [x1, y1, x2, y2] = entry.map((value) => Number(value) || 0)
-    return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
-  }
-  if (typeof entry === 'object') {
-    if (
-      ['x', 'y', 'width', 'height'].every((key) => typeof entry[key] === 'number')
-    ) {
-      return {
-        x: entry.x,
-        y: entry.y,
-        width: entry.width,
-        height: entry.height,
-      }
-    }
-    if (
-      ['x1', 'y1', 'x2', 'y2'].every(
-        (key) => typeof entry[key] === 'number' || typeof entry[key] === 'string',
-      )
-    ) {
-      const x1 = Number(entry.x1) || 0
-      const y1 = Number(entry.y1) || 0
-      const x2 = Number(entry.x2) || 0
-      const y2 = Number(entry.y2) || 0
-      return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
-    }
-  }
-  return null
-}
-
 const rawBoxes = computed(() => {
-  if (!props.scene) {
-    return []
-  }
-  const boxes = []
-  if (Array.isArray(props.scene.boxes)) {
-    boxes.push(...props.scene.boxes)
-  }
-  if (props.scene.bbox) {
-    boxes.push(props.scene.bbox)
-  }
-  return boxes.map(toBox).filter(Boolean)
+  return collectBoxesFromScene(props.scene)
 })
 
 const timelineEntries = computed(() => {
@@ -232,37 +202,12 @@ const activeTimelineEntry = computed(() => {
     return timeline[0]
   }
 
-  const fps = clipFps.value
-  const epsilon = fps ? 1 / fps : 0.05
-  const current = videoTime.value ?? 0
-
-  let candidate = timeline[0]
-  timeline.forEach((entry, index) => {
-    let offset = Number(
-      entry?.clip_offset ?? entry?.offset ?? entry?.relative_time ?? entry?.timestamp,
-    )
-    if (!Number.isFinite(offset)) {
-      offset = fps ? index / fps : index * epsilon
-    }
-    if (offset <= current + epsilon) {
-      candidate = entry
-    }
-  })
-
-  return candidate
+  return pickActiveTimelineEntry(timeline, videoTime.value ?? 0, clipFps.value)
 })
 
 const activeBoxes = computed(() => {
   if (sceneClip.value && activeTimelineEntry.value) {
-    const entry = activeTimelineEntry.value
-    const boxes = []
-    if (Array.isArray(entry.boxes)) {
-      boxes.push(...entry.boxes)
-    }
-    if (entry.bbox) {
-      boxes.push(entry.bbox)
-    }
-    return boxes.map(toBox).filter(Boolean)
+    return collectBoxesFromTimelineEntry(activeTimelineEntry.value)
   }
   return rawBoxes.value
 })
@@ -289,12 +234,7 @@ const overlayBoxes = computed(() => {
     return []
   }
 
-  return boxes.map((box) => ({
-    left: `${Math.max((box.x / width) * 100, 0)}%`,
-    top: `${Math.max((box.y / height) * 100, 0)}%`,
-    width: `${Math.min((box.width / width) * 100, 100)}%`,
-    height: `${Math.min((box.height / height) * 100, 100)}%`,
-  }))
+  return scaleBoxes(boxes, width, height)
 })
 
 const formatTimestamp = (timestamp) => {
