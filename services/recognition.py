@@ -32,7 +32,14 @@ def _normalize_scene(scene: Any) -> Dict[str, Any] | None:
     if scene is None:
         return None
     if isinstance(scene, dict):
-        return dict(scene)
+        scene_copy = dict(scene)
+        timeline = scene_copy.get("timeline")
+        if isinstance(timeline, list):
+            scene_copy["timeline"] = [
+                dict(entry) if isinstance(entry, dict) else entry
+                for entry in timeline
+            ]
+        return scene_copy
     if isinstance(scene, str):
         return {"frame": scene}
     return None

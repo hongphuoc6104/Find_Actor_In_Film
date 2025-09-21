@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
+
+import cv2
 import numpy as np
 import pandas as pd
 from prefect import task
@@ -11,6 +14,9 @@ from utils.config_loader import load_config
 from utils.indexer import build_index
 from utils.vector_utils import _mean_vector, l2_normalize
 from tasks.filter_clusters_task import filter_clusters_task
+
+
+DEFAULT_CLIP_FPS = 8.0
 
 
 def _frame_to_int(frame_name: Any) -> int:
@@ -42,6 +48,162 @@ def _normalize_bbox(bbox: Any) -> List[int]:
     return [int(float(x)) for x in arr]
 
 
+def _safe_slug(value: Any, fallback: str = "scene") -> str:
+    """Return a filesystem-friendly slug for ``value``."""
+
+    if value is None:
+        text = fallback
+    else:
+        try:
+            if isinstance(value, (int, np.integer)):
+                text = str(int(value))
+            else:
+                text = str(value)
+        except Exception:
+            text = fallback
+
+    sanitized = "".join(ch.lower() if ch.isalnum() else "_" for ch in text)
+    sanitized = sanitized.strip("_") or fallback
+    return sanitized[:80]
+
+
+def _prepare_track_timeline(
+    track_df: pd.DataFrame,
+    frames_dir: str | None,
+    fps: float | None,
+    track_id: Any,
+) -> Tuple[List[Dict[str, Any]], List[Tuple[int, str]]]:
+    """Create timeline entries and frame records for a given track."""
+
+    timeline: List[Dict[str, Any]] = []
+    frame_records: List[Tuple[int, str]] = []
+
+    base_dir = frames_dir if frames_dir and os.path.isdir(frames_dir) else None
+
+    for order_idx, row in enumerate(track_df.itertuples()):
+        frame_name = getattr(row, "frame", None)
+        if not isinstance(frame_name, str) or not frame_name:
+            continue
+
+        raw_idx = getattr(row, "frame_index", None)
+        frame_idx = None
+        if raw_idx is not None and raw_idx == raw_idx:
+            try:
+                frame_idx = int(raw_idx)
+            except (TypeError, ValueError):
+                frame_idx = _frame_to_int(frame_name)
+        else:
+            frame_idx = _frame_to_int(frame_name)
+
+        timestamp = _timestamp_from_frame(frame_idx, fps)
+        bbox = _normalize_bbox(getattr(row, "bbox", [])) if hasattr(row, "bbox") else []
+        det_score = getattr(row, "det_score", None)
+        det_score_val = None
+        if det_score is not None and det_score == det_score:
+            try:
+                det_score_val = float(det_score)
+            except (TypeError, ValueError):
+                det_score_val = None
+
+        entry = {
+            "order": order_idx,
+            "track_id": int(track_id) if track_id == track_id else None,
+            "frame": frame_name,
+            "frame_index": frame_idx if frame_idx is not None and frame_idx >= 0 else None,
+            "timestamp": timestamp,
+            "bbox": bbox,
+        }
+        if det_score_val is not None:
+            entry["det_score"] = det_score_val
+
+        entry_index = len(timeline)
+        timeline.append(entry)
+
+        if base_dir:
+            frame_path = os.path.join(base_dir, frame_name)
+            if os.path.exists(frame_path):
+                frame_records.append((entry_index, frame_path))
+
+    return timeline, frame_records
+
+
+def _export_track_clip(
+    frame_records: List[Tuple[int, str]],
+    clips_root: str | None,
+    movie_name: str,
+    character_id: str,
+    track_id: Any,
+    clip_fps: float | None,
+) -> Tuple[str | None, int | None, int | None, float | None, List[int]]:
+    """Persist a short MP4 clip for the provided frames."""
+
+    if not clips_root or not frame_records:
+        return None, None, None, None, []
+
+    clips_root_abs = os.path.abspath(clips_root)
+    os.makedirs(clips_root_abs, exist_ok=True)
+
+    movie_slug = _safe_slug(movie_name, "movie")
+    char_slug = _safe_slug(character_id, "character")
+    track_slug = _safe_slug(track_id, "track") if track_id is not None else "track"
+
+    clip_dir = os.path.join(clips_root_abs, movie_slug, char_slug)
+    os.makedirs(clip_dir, exist_ok=True)
+
+    filename = f"{movie_slug}_{char_slug}_{track_slug}.mp4"
+    output_path = os.path.join(clip_dir, filename)
+
+    fps_value = clip_fps if clip_fps and clip_fps > 0 else DEFAULT_CLIP_FPS
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+    writer = None
+    width = None
+    height = None
+    used_indices: List[int] = []
+
+    try:
+        for entry_index, frame_path in frame_records:
+            frame = cv2.imread(frame_path)
+            if frame is None:
+                continue
+
+            if width is None or height is None:
+                height, width = frame.shape[:2]
+                temp_writer = cv2.VideoWriter(
+                    output_path, fourcc, fps_value, (int(width), int(height))
+                )
+                if not temp_writer.isOpened():
+                    temp_writer.release()
+                    writer = None
+                    break
+                writer = temp_writer
+            elif writer is not None:
+                if frame.shape[1] != width or frame.shape[0] != height:
+                    frame = cv2.resize(frame, (int(width), int(height)))
+            else:
+                break
+
+            if writer is None:
+                break
+
+            writer.write(frame)
+            used_indices.append(entry_index)
+    finally:
+        if writer is not None:
+            writer.release()
+
+    if not used_indices or width is None or height is None:
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+        return None, None, None, None, []
+
+    rel_path = os.path.relpath(output_path, clips_root_abs)
+    return rel_path.replace(os.sep, "/"), int(width), int(height), float(fps_value), used_indices
+
+
 @task(name="Build Character Profiles Task")
 def character_task():
     """Xây dựng hồ sơ nhân vật riêng cho từng phim."""
@@ -55,6 +217,11 @@ def character_task():
     embeddings_path = storage_cfg.get("warehouse_embeddings")
     output_json_path = storage_cfg["characters_json"]
     merged_parquet_path = storage_cfg.get("clusters_merged_parquet")
+    frames_root = storage_cfg.get("frames_root")
+    clips_root = storage_cfg.get("scene_clips_root")
+    clips_root_abs = os.path.abspath(clips_root) if clips_root else None
+    if clips_root_abs:
+        os.makedirs(clips_root_abs, exist_ok=True)
 
     print(f"[Character] Loading clustered data from {clusters_path}...")
 
@@ -202,6 +369,13 @@ def character_task():
 
             scenes: List[Dict[str, Any]] = []
             rep_row: pd.Series | None = None
+            scene_frame_count = 0
+
+            movie_frames_dir = None
+            if frames_root:
+                potential_dir = os.path.join(frames_root, movie_name)
+                if os.path.isdir(potential_dir):
+                    movie_frames_dir = potential_dir
 
             if not movie_embeddings.empty and track_ids:
                 scene_rows = movie_embeddings["track_id"].isin(track_ids)
@@ -209,27 +383,136 @@ def character_task():
                 if not scene_df.empty:
                     if "frame_index" not in scene_df.columns:
                         scene_df["frame_index"] = scene_df["frame"].apply(_frame_to_int)
-                    scene_df.sort_values(["frame_index", "track_id"], inplace=True)
-                    for order_idx, row in enumerate(scene_df.itertuples()):
-                        frame_idx = int(row.frame_index) if row.frame_index == row.frame_index else -1
-                        timestamp = _timestamp_from_frame(frame_idx, fps)
-                        bbox = _normalize_bbox(row.bbox) if hasattr(row, "bbox") else []
-                        scenes.append(
-                            {
-                                "order": order_idx,
-                                "frame": row.frame,
-                                "frame_index": frame_idx if frame_idx >= 0 else None,
-                                "timestamp": timestamp,
-                                "bbox": bbox,
-                                "track_id": int(row.track_id)
-                                if hasattr(row, "track_id") and row.track_id == row.track_id
-                                else None,
-                                "det_score": float(row.det_score)
-                                if hasattr(row, "det_score")
-                                else None,
-                            }
+                    scene_df.sort_values(["track_id", "frame_index"], inplace=True)
+
+                    grouped_tracks: List[Tuple[float, Any, pd.DataFrame]] = []
+                    for track_key, track_df in scene_df.groupby("track_id"):
+                        track_df = track_df.sort_values("frame_index")
+                        first_idx = None
+                        if "frame_index" in track_df.columns:
+                            first_val = track_df["frame_index"].dropna().min()
+                            if first_val == first_val:
+                                try:
+                                    first_idx = float(first_val)
+                                except (TypeError, ValueError):
+                                    first_idx = None
+                        order_value = first_idx if first_idx is not None else float("inf")
+                        grouped_tracks.append((order_value, track_key, track_df))
+
+                    grouped_tracks.sort(
+                        key=lambda item: (
+                            item[0],
+                            _safe_slug(item[1], "track"),
                         )
-                    rep_idx = scene_df["det_score"].idxmax() if "det_score" in scene_df else scene_df.index[0]
+                    )
+
+                    for order_idx, (_, track_key, track_df) in enumerate(grouped_tracks):
+                        timeline_entries, frame_records = _prepare_track_timeline(
+                            track_df,
+                            movie_frames_dir,
+                            fps,
+                            track_key,
+                        )
+                        if not timeline_entries:
+                            continue
+
+                        clip_fps_value = float(fps) if fps else DEFAULT_CLIP_FPS
+                        clip_rel_path = None
+                        clip_width = None
+                        clip_height = None
+                        used_entry_indices: List[int] = []
+
+                        if clips_root_abs and frame_records:
+                            (
+                                clip_rel_path,
+                                clip_width,
+                                clip_height,
+                                clip_fps_result,
+                                used_entry_indices,
+                            ) = _export_track_clip(
+                                frame_records,
+                                clips_root_abs,
+                                movie_name,
+                                str(final_id),
+                                track_key,
+                                clip_fps_value,
+                            )
+                            if clip_fps_result:
+                                clip_fps_value = clip_fps_result
+
+                        if clip_rel_path and used_entry_indices:
+                            unique_indices = sorted(dict.fromkeys(used_entry_indices))
+                            timeline_to_store = [
+                                timeline_entries[idx]
+                                for idx in unique_indices
+                                if 0 <= idx < len(timeline_entries)
+                            ]
+                        else:
+                            timeline_to_store = timeline_entries
+
+                        if not timeline_to_store:
+                            continue
+
+                        if clip_width is None or clip_height is None:
+                            sample_path = None
+                            if frame_records:
+                                sample_path = frame_records[0][1]
+                            if (
+                                sample_path
+                                and os.path.exists(sample_path)
+                            ):
+                                sample_img = cv2.imread(sample_path)
+                                if sample_img is not None:
+                                    clip_height, clip_width = sample_img.shape[:2]
+
+                        for seq_idx, entry in enumerate(timeline_to_store):
+                            entry["order"] = seq_idx
+                            if clip_rel_path:
+                                entry["clip_offset"] = round(
+                                    seq_idx / clip_fps_value, 3
+                                )
+
+                        scene_frame_count += len(timeline_to_store)
+
+                        first_entry = timeline_to_store[0]
+                        last_entry = timeline_to_store[-1]
+
+                        try:
+                            track_int = int(track_key)
+                        except (TypeError, ValueError):
+                            track_int = None
+
+                        scene_entry = {
+                            "order": order_idx,
+                            "track_id": track_int,
+                            "frame": first_entry.get("frame"),
+                            "frame_index": first_entry.get("frame_index"),
+                            "timestamp": first_entry.get("timestamp"),
+                            "bbox": first_entry.get("bbox"),
+                            "det_score": first_entry.get("det_score"),
+                            "timeline": timeline_to_store,
+                            "frame_count": len(timeline_to_store),
+                            "clip_path": clip_rel_path,
+                            "clip_fps": clip_fps_value if clip_rel_path else None,
+                            "duration": round(
+                                len(timeline_to_store) / clip_fps_value, 3
+                            )
+                            if clip_rel_path
+                            else None,
+                            "end_frame": last_entry.get("frame"),
+                            "end_frame_index": last_entry.get("frame_index"),
+                            "end_timestamp": last_entry.get("timestamp"),
+                            "width": clip_width,
+                            "height": clip_height,
+                        }
+
+                        scenes.append(scene_entry)
+
+                    rep_idx = (
+                        scene_df["det_score"].idxmax()
+                        if "det_score" in scene_df
+                        else scene_df.index[0]
+                    )
                     rep_row = scene_df.loc[rep_idx]
 
             if rep_row is None and not tracks.empty:
@@ -288,14 +571,18 @@ def character_task():
             movie_characters[str(final_id)] = {
                 "movie": movie_name,
                 "movie_id": int(movie_id),
-                "count": int(len(scenes)) if scenes else int(len(tracks)),
+                "count": int(scene_frame_count)
+                if scene_frame_count
+                else int(len(track_ids)),
                 "track_count": len(track_ids),
                 "rep_image": rep_image,
                 "preview_paths": preview_paths,
                 "previews": preview_entries,
                 "scenes": scenes,
                 "embedding": centroid_vec.tolist(),
-                "raw_cluster_ids": sorted(tracks["cluster_id"].astype(str).unique().tolist()),
+                "raw_cluster_ids": sorted(
+                    tracks["cluster_id"].astype(str).unique().tolist()
+                ),
             }
 
         if movie_characters:

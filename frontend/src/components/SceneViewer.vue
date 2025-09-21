@@ -442,9 +442,9 @@ const onVideoTimeUpdate = (event) => {
 
 .scene-viewer__bbox {
   position: absolute;
-  border: 3px solid rgba(59, 130, 246, 0.9);
+  border: 3px solid rgba(34, 197, 94, 0.9);
   border-radius: 0.25rem;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.35);
 }
 
 .scene-viewer__placeholder {
