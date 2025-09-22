@@ -100,6 +100,7 @@ const activeComponent = computed(() => ROUTES[currentPath.value] ?? ROUTES[DEFAU
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  background: #f8fafc;
 }
 
 .app-shell__header {
@@ -107,8 +108,9 @@ const activeComponent = computed(() => ROUTES[currentPath.value] ?? ROUTES[DEFAU
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem 2rem 1.25rem;
-  background: rgba(15, 23, 42, 0.05);
-  backdrop-filter: blur(8px);
+  background: #ffffff;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -147,8 +149,8 @@ const activeComponent = computed(() => ROUTES[currentPath.value] ?? ROUTES[DEFAU
 
 .app-shell__main {
   flex: 1;
-  padding: 2.5rem 1.5rem 4rem;
-  max-width: 1080px;
+  padding: 2.5rem 1.5rem 3rem;
+  max-width: 1100px;
   margin: 0 auto;
   width: 100%;
   display: block;
@@ -163,7 +165,7 @@ const activeComponent = computed(() => ROUTES[currentPath.value] ?? ROUTES[DEFAU
   }
 
   .app-shell__main {
-    padding: 2rem 1rem 3rem;
+    padding: 2rem 1rem 2.5rem;
   }
 }
 </style>

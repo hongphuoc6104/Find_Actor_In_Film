@@ -10,80 +10,86 @@
       </button>
     </header>
 
-    <section class="management-page__upload">
-      <h2>Tải phim mới</h2>
-      <form @submit.prevent="submitUpload" class="upload-form">
-        <label>
-          <span>Tệp video</span>
-          <input ref="videoInput" type="file" accept="video/*" @change="onVideoChange" />
-        </label>
+    <div class="management-page__layout">
+      <aside class="management-page__sidebar">
+        <section class="management-page__panel management-page__panel--upload">
+          <h2>Tải phim mới</h2>
+          <form @submit.prevent="submitUpload" class="upload-form">
+            <label>
+              <span>Tệp video</span>
+              <input ref="videoInput" type="file" accept="video/*" @change="onVideoChange" />
+            </label>
 
-        <div class="upload-form__grid">
-          <label>
-            <span>Mã phim (tùy chọn)</span>
-            <input type="text" v-model="form.movieId" placeholder="movie_001" />
-          </label>
-          <label>
-            <span>Nguồn</span>
-            <input type="text" v-model="form.source" placeholder="Blu-ray rip" />
-          </label>
-        </div>
+            <div class="upload-form__grid">
+              <label>
+                <span>Mã phim (tùy chọn)</span>
+                <input type="text" v-model="form.movieId" placeholder="movie_001" />
+              </label>
+              <label>
+                <span>Nguồn</span>
+                <input type="text" v-model="form.source" placeholder="Blu-ray rip" />
+              </label>
+            </div>
 
-        <label class="upload-form__checkbox">
-          <input type="checkbox" v-model="form.refresh" />
-          <span>Làm mới dữ liệu nhận diện sau khi tải lên</span>
-        </label>
+            <label class="upload-form__checkbox">
+              <input type="checkbox" v-model="form.refresh" />
+              <span>Làm mới dữ liệu nhận diện sau khi tải lên</span>
+            </label>
 
-        <button type="submit" :disabled="!form.file || isSubmitting">
-          <span v-if="isSubmitting">Đang tải…</span>
-          <span v-else>Gửi yêu cầu xử lý</span>
-        </button>
-      </form>
+            <button type="submit" :disabled="!form.file || isSubmitting">
+              <span v-if="isSubmitting">Đang tải…</span>
+              <span v-else>Gửi yêu cầu xử lý</span>
+            </button>
+          </form>
 
-      <p v-if="uploadError" class="upload-form__error">{{ uploadError }}</p>
-      <p v-else-if="uploadMessage" class="upload-form__info">{{ uploadMessage }}</p>
-    </section>
+          <p v-if="uploadError" class="upload-form__error">{{ uploadError }}</p>
+          <p v-else-if="uploadMessage" class="upload-form__info">{{ uploadMessage }}</p>
+        </section>
+      </aside>
 
-    <section class="management-page__list">
-      <header>
-        <h2>Danh sách phim</h2>
-        <p v-if="lastFetched" class="management-page__timestamp">Cập nhật lần cuối: {{ formatTimestamp(lastFetched) }}</p>
-      </header>
+      <section class="management-page__content">
+        <section class="management-page__panel management-page__panel--list">
+          <header>
+            <h2>Danh sách phim</h2>
+            <p v-if="lastFetched" class="management-page__timestamp">Cập nhật lần cuối: {{ formatTimestamp(lastFetched) }}</p>
+          </header>
 
-      <div v-if="isLoading" class="management-page__placeholder">Đang tải danh sách phim…</div>
-      <div v-else-if="error" class="management-page__placeholder management-page__placeholder--error">{{ error }}</div>
-      <div v-else-if="!movies.length" class="management-page__placeholder">Chưa có phim nào trong hệ thống.</div>
-      <table v-else class="management-page__table">
-        <thead>
-          <tr>
-            <th>Tên phim</th>
-            <th>Nhân vật</th>
-            <th>Cảnh</th>
-            <th>Ảnh preview</th>
-            <th>Xác nhận</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="movie in movies" :key="movie.movie_id">
-            <td>
-              <div class="management-page__movie-name">
-                <strong>{{ movie.movie || `Phim #${movie.movie_id}` }}</strong>
-                <span class="management-page__movie-id">ID: {{ movie.movie_id }}</span>
-              </div>
-            </td>
-            <td>{{ movie.character_count }}</td>
-            <td>{{ movie.scene_count }}</td>
-            <td>{{ movie.preview_count }}</td>
-            <td>
-              <span v-if="progress(movie.movie_id).total">
-                {{ progress(movie.movie_id).confirmed }}/{{ progress(movie.movie_id).total }} đã xác nhận
-              </span>
-              <span v-else>Chưa xác nhận</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
+          <div v-if="isLoading" class="management-page__placeholder">Đang tải danh sách phim…</div>
+          <div v-else-if="error" class="management-page__placeholder management-page__placeholder--error">{{ error }}</div>
+          <div v-else-if="!movies.length" class="management-page__placeholder">Chưa có phim nào trong hệ thống.</div>
+          <table v-else class="management-page__table">
+            <thead>
+              <tr>
+                <th>Tên phim</th>
+                <th>Nhân vật</th>
+                <th>Cảnh</th>
+                <th>Ảnh preview</th>
+                <th>Xác nhận</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="movie in movies" :key="movie.movie_id">
+                <td>
+                  <div class="management-page__movie-name">
+                    <strong>{{ movie.movie || `Phim #${movie.movie_id}` }}</strong>
+                    <span class="management-page__movie-id">ID: {{ movie.movie_id }}</span>
+                  </div>
+                </td>
+                <td>{{ movie.character_count }}</td>
+                <td>{{ movie.scene_count }}</td>
+                <td>{{ movie.preview_count }}</td>
+                <td>
+                  <span v-if="progress(movie.movie_id).total">
+                    {{ progress(movie.movie_id).confirmed }}/{{ progress(movie.movie_id).total }} đã xác nhận
+                  </span>
+                  <span v-else>Chưa xác nhận</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -223,37 +229,49 @@ onMounted(() => {
 }
 
 .management-page__refresh {
-  border: none;
+  border: 1px solid #2563eb;
   border-radius: 999px;
   background: #2563eb;
   color: #f8fafc;
-  padding: 0.6rem 1.4rem;
+  padding: 0.55rem 1.35rem;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 10px 35px rgba(37, 99, 235, 0.35);
-  transition: transform 120ms ease, box-shadow 120ms ease;
+  transition: filter 150ms ease;
 }
 
 .management-page__refresh:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-  box-shadow: none;
 }
 
 .management-page__refresh:not(:disabled):hover {
-  transform: translateY(-1px);
+  filter: brightness(0.95);
 }
 
-.management-page__upload {
+.management-page__layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 2rem;
+  align-items: start;
+}
+
+.management-page__sidebar {
+  position: sticky;
+  top: 1.5rem;
+}
+
+.management-page__panel {
   background: #ffffff;
-  border-radius: 1rem;
-  padding: 1.75rem;
-  box-shadow: 0 15px 45px rgba(15, 23, 42, 0.08);
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  padding: 1.5rem;
   display: grid;
   gap: 1.25rem;
 }
 
-.management-page__upload h2 {
+.management-page__panel--upload h2,
+.management-page__panel--list h2 {
   margin: 0;
 }
 
@@ -271,7 +289,7 @@ onMounted(() => {
 .upload-form input[type='file'],
 .upload-form input[type='text'] {
   border: 1px solid #cbd5f5;
-  border-radius: 0.75rem;
+  border-radius: 0.65rem;
   padding: 0.6rem 0.75rem;
   font-size: 0.95rem;
 }
@@ -291,25 +309,23 @@ onMounted(() => {
 
 .upload-form button[type='submit'] {
   justify-self: start;
-  border: none;
+  border: 1px solid #2563eb;
   border-radius: 999px;
-  background: #16a34a;
-  color: #f0fdf4;
+  background: #2563eb;
+  color: #f8fafc;
   padding: 0.6rem 1.5rem;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 120ms ease, box-shadow 120ms ease;
-  box-shadow: 0 10px 35px rgba(22, 163, 74, 0.35);
+  transition: filter 150ms ease;
 }
 
 .upload-form button[type='submit']:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-  box-shadow: none;
 }
 
 .upload-form button[type='submit']:not(:disabled):hover {
-  transform: translateY(-1px);
+  filter: brightness(0.95);
 }
 
 .upload-form__error {
@@ -323,21 +339,17 @@ onMounted(() => {
   color: #2563eb;
 }
 
-.management-page__list {
+.management-page__panel--list {
   display: grid;
   gap: 1.5rem;
 }
 
-.management-page__list header {
+.management-page__panel--list > header {
   display: flex;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.75rem;
   align-items: baseline;
-}
-
-.management-page__list h2 {
-  margin: 0;
 }
 
 .management-page__timestamp {
@@ -348,24 +360,25 @@ onMounted(() => {
 
 .management-page__placeholder {
   padding: 1.25rem 1rem;
-  border-radius: 0.9rem;
-  background: #ffffff;
+  border-radius: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
   color: #475569;
   text-align: center;
-  box-shadow: 0 15px 35px rgba(15, 23, 42, 0.06);
 }
 
 .management-page__placeholder--error {
   color: #b91c1c;
+  border-color: rgba(239, 68, 68, 0.35);
 }
 
 .management-page__table {
   width: 100%;
   border-collapse: collapse;
   background: #ffffff;
-  border-radius: 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
   overflow: hidden;
-  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.08);
 }
 
 .management-page__table th,
@@ -377,7 +390,7 @@ onMounted(() => {
 }
 
 .management-page__table th {
-  background: #f1f5f9;
+  background: #f8fafc;
   font-weight: 600;
   color: #1e293b;
 }
@@ -396,6 +409,16 @@ onMounted(() => {
   font-size: 0.85rem;
 }
 
+@media (max-width: 960px) {
+  .management-page__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .management-page__sidebar {
+    position: static;
+  }
+}
+
 @media (max-width: 768px) {
   .management-page__table th,
   .management-page__table td {
@@ -404,7 +427,7 @@ onMounted(() => {
 }
 
 @media (max-width: 640px) {
-  .management-page__upload {
+  .management-page__panel {
     padding: 1.25rem;
   }
 }

@@ -1,53 +1,86 @@
 <template>
   <section class="scene-viewer">
     <header class="scene-viewer__header">
-      <h3>Cảnh hiện tại</h3>
-      <p v-if="sceneIndexLabel" class="scene-viewer__meta">{{ sceneIndexLabel }}</p>
+      <div>
+        <h3>Cảnh hiện tại</h3>
+        <p v-if="sceneIndexLabel" class="scene-viewer__meta">{{ sceneIndexLabel }}</p>
+      </div>
     </header>
 
-    <div class="scene-viewer__content" :class="{ 'scene-viewer__content--loading': isLoading }">
-      <div v-if="isLoading" class="scene-viewer__loading">Đang tải cảnh…</div>
-      <template v-else>
+    <div class="scene-viewer__layout">
+      <div class="scene-viewer__stage">
         <div
-          v-if="sceneClip"
-          class="scene-viewer__frame scene-viewer__frame--video"
+          class="scene-viewer__canvas"
+          :class="{ 'scene-viewer__canvas--loading': isLoading }"
         >
-          <video
-            ref="videoRef"
-            class="scene-viewer__video"
-            :src="sceneClip"
-            controls
-            @loadedmetadata="onVideoLoadedMetadata"
-            @loadeddata="onVideoLoadedMetadata"
-            @timeupdate="onVideoTimeUpdate"
-            @seeked="onVideoTimeUpdate"
-          />
-          <div
-            v-for="(box, index) in overlayBoxes"
-            :key="`video-box-${index}`"
-            class="scene-viewer__bbox"
-            :style="box"
-          />
+          <div v-if="isLoading" class="scene-viewer__loading">Đang tải cảnh…</div>
+          <template v-else>
+            <div v-if="sceneClip" class="scene-viewer__frame scene-viewer__frame--video">
+              <video
+                ref="videoRef"
+                class="scene-viewer__video"
+                :src="sceneClip"
+                controls
+                @loadedmetadata="onVideoLoadedMetadata"
+                @loadeddata="onVideoLoadedMetadata"
+                @timeupdate="onVideoTimeUpdate"
+                @seeked="onVideoTimeUpdate"
+              />
+              <div
+                v-for="(box, index) in overlayBoxes"
+                :key="`video-box-${index}`"
+                class="scene-viewer__bbox"
+                :style="box"
+              />
+            </div>
+            <div v-else-if="sceneImage" class="scene-viewer__frame">
+              <img :src="sceneImage" alt="Khung hình đề xuất" @load="onImageLoad" />
+              <div
+                v-for="(box, index) in overlayBoxes"
+                :key="`image-box-${index}`"
+                class="scene-viewer__bbox"
+                :style="box"
+              />
+            </div>
+            <p v-else class="scene-viewer__placeholder">Không có cảnh nào để hiển thị.</p>
+          </template>
         </div>
-        <div v-else-if="sceneImage" class="scene-viewer__frame">
-          <img :src="sceneImage" alt="Khung hình đề xuất" @load="onImageLoad" />
-          <div
-            v-for="(box, index) in overlayBoxes"
-            :key="`image-box-${index}`"
-            class="scene-viewer__bbox"
-            :style="box"
-          />
-        </div>
-        <p v-else class="scene-viewer__placeholder">Không có cảnh nào để hiển thị.</p>
-      </template>
-    </div>
-
-    <dl v-if="sceneDetails.length" class="scene-viewer__details">
-      <div v-for="item in sceneDetails" :key="item.label" class="scene-viewer__details-row">
-        <dt>{{ item.label }}</dt>
-        <dd>{{ item.value }}</dd>
       </div>
-    </dl>
+
+      <aside v-if="hasSidebarContent" class="scene-viewer__sidebar">
+        <section v-if="sceneDetails.length" class="scene-viewer__panel">
+          <h4>Thông tin cảnh</h4>
+          <dl class="scene-viewer__details">
+            <div v-for="item in sceneDetails" :key="item.label" class="scene-viewer__details-row">
+              <dt>{{ item.label }}</dt>
+              <dd>{{ item.value }}</dd>
+            </div>
+          </dl>
+        </section>
+
+        <details v-if="timelineSegments.length" class="scene-viewer__panel scene-viewer__timeline" open>
+          <summary>Dòng thời gian</summary>
+          <ol>
+            <li
+              v-for="segment in timelineSegments"
+              :key="segment.id"
+              :class="['scene-viewer__timeline-item', { active: segment.active }]"
+            >
+              <div class="scene-viewer__timeline-header">
+                <span class="scene-viewer__timeline-index">{{ segment.order }}</span>
+                <div class="scene-viewer__timeline-text">
+                  <span class="scene-viewer__timeline-label">{{ segment.label }}</span>
+                  <span v-if="segment.range" class="scene-viewer__timeline-range">{{ segment.range }}</span>
+                </div>
+              </div>
+              <p v-if="segment.description" class="scene-viewer__timeline-description">
+                {{ segment.description }}
+              </p>
+            </li>
+          </ol>
+        </details>
+      </aside>
+    </div>
   </section>
 </template>
 
@@ -127,7 +160,6 @@ const sceneClip = computed(() => {
     props.scene.clip_path,
   ]
   const clip = sources.find((value) => typeof value === 'string' && value)
-  return clip || ''
   return clip ? toAbsoluteAssetUrl(clip) : ''
 })
 
@@ -158,7 +190,7 @@ const sceneImage = computed(() => {
     props.scene.thumbnail,
   ]
   const source = sources.find((item) => typeof item === 'string' && item)
-  return source || ''
+  return source ? toAbsoluteAssetUrl(source) : ''
 })
 
 const sceneIndexLabel = computed(() => {
@@ -312,6 +344,38 @@ const sceneDetails = computed(() => {
   return details
 })
 
+const timelineSegments = computed(() => {
+  return timelineEntries.value
+    .map((entry, index) => {
+      const start = formatTimestamp(Number(entry.start ?? entry.time ?? entry.timestamp))
+      const end = formatTimestamp(Number(entry.end ?? entry.until))
+      let range = ''
+      if (start && end) {
+        range = `${start} → ${end}`
+      } else if (start) {
+        range = start
+      } else if (end) {
+        range = `Đến ${end}`
+      }
+      const label =
+        entry.label || entry.event || entry.state || entry.status || `Khoảng #${index + 1}`
+      const description = entry.description || entry.note || ''
+      return {
+        id: entry.id ?? index,
+        order: index + 1,
+        label,
+        range,
+        description,
+        active: entry === activeTimelineEntry.value,
+      }
+    })
+    .filter((segment) => segment.label || segment.range || segment.description)
+})
+
+const hasSidebarContent = computed(() => {
+  return Boolean(sceneDetails.value.length || timelineSegments.value.length)
+})
+
 const onImageLoad = (event) => {
   if (!event?.target) {
     return
@@ -346,12 +410,16 @@ const onVideoTimeUpdate = (event) => {
 
 <style scoped>
 .scene-viewer {
-  display: grid;
-  gap: 1rem;
+  --surface-border: #e2e8f0;
+  --surface-radius: 0.75rem;
+  --surface-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
   background: #ffffff;
-  border-radius: 1rem;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--surface-radius);
   padding: 1.5rem;
-  box-shadow: 0 15px 45px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--surface-shadow);
+  display: grid;
+  gap: 1.5rem;
 }
 
 .scene-viewer__header {
@@ -372,22 +440,36 @@ const onVideoTimeUpdate = (event) => {
   font-size: 0.9rem;
 }
 
-.scene-viewer__content {
+.scene-viewer__layout {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  align-items: start;
+}
+
+.scene-viewer__stage {
+  display: grid;
+  gap: 1rem;
+}
+
+.scene-viewer__canvas {
   position: relative;
-  min-height: 240px;
-  border-radius: 0.75rem;
-  background: #f1f5f9;
+  min-height: 260px;
+  border: 1px solid var(--surface-border);
+  border-radius: calc(var(--surface-radius) - 0.1rem);
+  background: #0f172a;
   overflow: hidden;
 }
 
-.scene-viewer__content--loading {
+.scene-viewer__canvas--loading {
   display: grid;
   place-items: center;
+  background: #111827;
 }
 
 .scene-viewer__loading {
   font-weight: 600;
-  color: #1e293b;
+  color: #f8fafc;
 }
 
 .scene-viewer__frame {
@@ -402,21 +484,45 @@ const onVideoTimeUpdate = (event) => {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #0f172a;
+  background: transparent;
+}
+
+.scene-viewer__video {
+  background: transparent;
 }
 
 .scene-viewer__bbox {
   position: absolute;
-  border: 3px solid rgba(34, 197, 94, 0.9);
-  border-radius: 0.25rem;
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.35);
+  border: 2px solid rgba(14, 165, 233, 0.9);
+  border-radius: 0.35rem;
+  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.3);
 }
 
 .scene-viewer__placeholder {
   margin: 0;
-  padding: 2.5rem 1rem;
+  color: #cbd5f5;
   text-align: center;
-  color: #475569;
+  padding: 2.5rem 1rem;
+}
+
+.scene-viewer__sidebar {
+  display: grid;
+  gap: 1rem;
+}
+
+.scene-viewer__panel {
+  background: #f8fafc;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--surface-radius);
+  padding: 1rem 1.25rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.scene-viewer__panel h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: #1e293b;
 }
 
 .scene-viewer__details {
@@ -427,9 +533,10 @@ const onVideoTimeUpdate = (event) => {
 
 .scene-viewer__details-row {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: minmax(100px, max-content) 1fr;
   gap: 0.75rem;
   font-size: 0.9rem;
+  align-items: baseline;
 }
 
 .scene-viewer__details-row dt {
@@ -440,6 +547,94 @@ const onVideoTimeUpdate = (event) => {
 .scene-viewer__details-row dd {
   margin: 0;
   color: #334155;
+}
+
+.scene-viewer__timeline {
+  background: #f1f5f9;
+}
+
+.scene-viewer__timeline summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #1e293b;
+  list-style: none;
+}
+
+.scene-viewer__timeline summary::-webkit-details-marker {
+  display: none;
+}
+
+.scene-viewer__timeline[open] > summary {
+  margin-bottom: 0.75rem;
+}
+
+.scene-viewer__timeline ol {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.scene-viewer__timeline-item {
+  list-style: none;
+  border: 1px solid transparent;
+  border-radius: 0.65rem;
+  padding: 0.5rem 0.75rem;
+  background: #ffffff;
+  display: grid;
+  gap: 0.35rem;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.scene-viewer__timeline-item.active {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.scene-viewer__timeline-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.scene-viewer__timeline-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #f8fafc;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.scene-viewer__timeline-text {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.scene-viewer__timeline-label {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.scene-viewer__timeline-range {
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.scene-viewer__timeline-description {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+@media (max-width: 900px) {
+  .scene-viewer__layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {
