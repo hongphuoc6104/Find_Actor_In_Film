@@ -449,7 +449,7 @@ def _export_track_clip(
 
     fps_value = clip_fps if clip_fps and clip_fps > 0 else DEFAULT_CLIP_FPS
 
-    codec_candidates = ["avc1", "H264", "mp4v"]
+    codec_candidates = [ "mp4v", "avc1", "H264"]
     writer = None
     width = None
     height = None
