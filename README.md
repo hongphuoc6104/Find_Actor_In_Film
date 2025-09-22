@@ -64,6 +64,14 @@ thư mục được cấu hình tại `storage.cluster_previews_root`. Mỗi
 `metadata.json` mô tả thứ tự xuất hiện, timestamp và bbox tương ứng để phục vụ
 việc xác nhận thủ công.
 
+## Scene clip exports
+
+`tasks/character_task.py` có thể ghi các đoạn clip MP4 ngắn cho từng track khi
+`storage.scene_clips_root` được cấu hình. Bộ xuất hiện ưu tiên FourCC H.264
+thân thiện với trình duyệt (`avc1`/`H264`) và chỉ quay lại `mp4v` khi bộ mã hóa
+không khả dụng. Đảm bảo bản dựng OpenCV đi kèm FFmpeg hoặc GStreamer với hỗ trợ
+H.264 (ví dụ `libx264`) để quá trình ghi clip hoạt động ổn định.
+
 ## Gateway service
 
 The project ships with a small Express gateway (`gateway/server.js`) that proxies

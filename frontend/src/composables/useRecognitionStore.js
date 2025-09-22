@@ -2,7 +2,7 @@ import { computed, reactive } from 'vue'
 import axios from 'axios'
 
 import { API_BASE_URL } from '../config.js'
-
+import { toAbsoluteAssetUrl } from '../utils/assetUrls.js'
 const defaultInfoMessage = 'Tải ảnh khuôn mặt để bắt đầu tìm kiếm.'
 
 const state = reactive({
@@ -98,6 +98,36 @@ const normaliseNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+const assetFieldKeys = [
+  'frame',
+  'frame_url',
+  'framePath',
+  'frame_path',
+  'framePreview',
+  'frame_preview',
+  'frameUrl',
+  'preview',
+  'preview_url',
+  'preview_path',
+  'previewImage',
+  'preview_image',
+  'previewUrl',
+  'previewPath',
+  'image',
+  'thumbnail',
+  'clip',
+  'clip_url',
+  'clip_path',
+  'clipUrl',
+  'clipPath',
+  'video',
+  'video_url',
+  'video_path',
+  'videoUrl',
+  'videoPath',
+]
+
+
 const ensureFrameMetadata = (entry) => {
   if (!entry || typeof entry !== 'object') {
     return entry ?? null
@@ -111,26 +141,36 @@ const ensureFrameMetadata = (entry) => {
     )
   }
 
-  const rawFrame =
-    typeof entry.frame === 'string' && entry.frame ? entry.frame : ''
-  const explicitUrl =
-    typeof entry.frame_url === 'string' && entry.frame_url ? entry.frame_url : ''
-  const frameUrl = explicitUrl || rawFrame
+  const frameSources = [
+    entry.frame_url,
+    entry.frame,
+    entry.frameUrl,
+    entry.frame_path,
+    entry.framePath,
+  ]
+  const frameUrl = frameSources.find((value) => typeof value === 'string' && value) || ''
+  const absoluteFrameUrl = toAbsoluteAssetUrl(frameUrl)
 
-  if (frameUrl) {
-    copy.frame_url = frameUrl
-    copy.frame = frameUrl
+  if (absoluteFrameUrl) {
+    copy.frame_url = absoluteFrameUrl
+    copy.frame = absoluteFrameUrl
   }
 
   const frameLabelSource =
     typeof entry.frame_name === 'string' && entry.frame_name
       ? entry.frame_name
-      : rawFrame || explicitUrl
+      : frameUrl
 
   if (frameLabelSource) {
     const parts = String(frameLabelSource).split(/[\\/]/)
     copy.frame_name = parts[parts.length - 1] || frameLabelSource
   }
+  assetFieldKeys.forEach((key) => {
+    const value = copy[key] ?? entry[key]
+    if (typeof value === 'string' && value) {
+      copy[key] = toAbsoluteAssetUrl(value)
+    }
+  })
 
   return copy
 }
@@ -595,4 +635,5 @@ export const useRecognitionStore = () => ({
 export const __test__ = {
   normaliseCharacter,
   normaliseMovies,
+  ensureFrameMetadata,
 }

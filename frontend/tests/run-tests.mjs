@@ -12,8 +12,8 @@ import {
   scaleBoxes,
   toBox,
 } from '../src/utils/sceneTimeline.js'
-
-const { normaliseMovies } = __test__
+import { toAbsoluteAssetUrl, __test__ as assetUrlTest } from '../src/utils/assetUrls.js'
+const { normaliseMovies, ensureFrameMetadata } = __test__
 
 const samplePayload = [
   {
@@ -122,3 +122,70 @@ assert.equal(
 )
 
 console.log('Scene timeline utility tests passed.')
+
+const assetBase = assetUrlTest.computeApiAssetBase('https://api.example.com/api/')
+assert.equal(
+  assetBase,
+  'https://api.example.com',
+  'API asset base should drop a trailing /api segment',
+)
+
+const clipAsset = toAbsoluteAssetUrl('clips/sample.mp4', 'https://api.example.com/api')
+assert.equal(
+  clipAsset,
+  'https://api.example.com/clips/sample.mp4',
+  'Relative clip paths should resolve against the API host',
+)
+
+const frameAsset = toAbsoluteAssetUrl('/frames/sample.jpg', 'https://api.example.com/api/')
+assert.equal(
+  frameAsset,
+  'https://api.example.com/frames/sample.jpg',
+  'Leading slashes should be handled when resolving asset URLs',
+)
+
+const normalisedMetadata = ensureFrameMetadata({
+  frame: '/frames/example.jpg',
+  preview_image: 'previews/example.jpg',
+  clip_url: '/clips/example.mp4',
+  timeline: [
+    {
+      frame_url: 'frames/nested.jpg',
+      clip_path: '/clips/nested.mp4',
+      preview_path: 'previews/nested.jpg',
+    },
+  ],
+})
+
+assert.equal(
+  normalisedMetadata.frame,
+  'http://localhost:8000/frames/example.jpg',
+  'Frame URLs in metadata should be converted to absolute URLs',
+)
+assert.equal(
+  normalisedMetadata.preview_image,
+  'http://localhost:8000/previews/example.jpg',
+  'Preview images should resolve to absolute API URLs',
+)
+assert.equal(
+  normalisedMetadata.clip_url,
+  'http://localhost:8000/clips/example.mp4',
+  'Clip URLs should resolve to the API host',
+)
+assert.equal(
+  normalisedMetadata.timeline[0].frame,
+  'http://localhost:8000/frames/nested.jpg',
+  'Nested timeline frames should inherit absolute URLs',
+)
+assert.equal(
+  normalisedMetadata.timeline[0].clip_path,
+  'http://localhost:8000/clips/nested.mp4',
+  'Nested clip paths should be normalised to absolute URLs',
+)
+assert.equal(
+  normalisedMetadata.timeline[0].preview_path,
+  'http://localhost:8000/previews/nested.jpg',
+  'Nested preview paths should be normalised to absolute URLs',
+)
+
+console.log('Asset URL helper tests passed.')

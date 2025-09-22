@@ -60,7 +60,7 @@ import {
   pickActiveTimelineEntry,
   scaleBoxes,
 } from '../utils/sceneTimeline.js'
-
+import { toAbsoluteAssetUrl } from '../utils/assetUrls.js'
 
 const props = defineProps({
   scene: {
@@ -128,6 +128,7 @@ const sceneClip = computed(() => {
   ]
   const clip = sources.find((value) => typeof value === 'string' && value)
   return clip || ''
+  return clip ? toAbsoluteAssetUrl(clip) : ''
 })
 
 watch(

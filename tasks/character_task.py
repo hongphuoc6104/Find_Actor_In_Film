@@ -156,7 +156,6 @@ def _export_track_clip(
     clip_fps: float | None,
 ) -> Dict[str, Any]:
     """Persist a short MP4 clip for the provided frames."""
-
     if not clips_root or not frame_records:
         return {
             "clip_path": None,
@@ -180,13 +179,20 @@ def _export_track_clip(
     output_path = os.path.join(clip_dir, filename)
 
     fps_value = clip_fps if clip_fps and clip_fps > 0 else DEFAULT_CLIP_FPS
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
+    codec_candidates = ["avc1", "H264", "mp4v"]
     writer = None
     width = None
     height = None
     used_indices: List[int] = []
     selected_records = _select_clip_frames(frame_records, fps_value)
+
+    def _remove_existing_output() -> None:
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
 
     try:
         for entry_index, frame_path in selected_records:
@@ -196,14 +202,21 @@ def _export_track_clip(
 
             if width is None or height is None:
                 height, width = frame.shape[:2]
-                temp_writer = cv2.VideoWriter(
-                    output_path, fourcc, fps_value, (int(width), int(height))
-                )
-                if not temp_writer.isOpened():
+            if writer is None:
+                if width is None or height is None:
+                    continue
+                for codec in codec_candidates:
+                    _remove_existing_output()
+                    fourcc = cv2.VideoWriter_fourcc(*codec)
+                    temp_writer = cv2.VideoWriter(
+                        output_path, fourcc, fps_value, (int(width), int(height))
+                    )
+                    if temp_writer.isOpened():
+                        writer = temp_writer
+                        break
                     temp_writer.release()
-                    writer = None
+                if writer is None:
                     break
-                writer = temp_writer
             elif writer is not None:
                 if frame.shape[1] != width or frame.shape[0] != height:
                     frame = cv2.resize(frame, (int(width), int(height)))
