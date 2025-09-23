@@ -149,9 +149,7 @@ const activeComponent = computed(() => ROUTES[currentPath.value] ?? ROUTES[DEFAU
 
 .app-shell__main {
   flex: 1;
-  padding: 2.5rem 1.5rem 3rem;
-  max-width: min(1400px, 100%);
-  margin: 0 auto;
+  padding: 2.5rem clamp(1.5rem, 5vw, 4rem) 3rem;
   width: 100%;
   display: block;
 }
@@ -165,7 +163,7 @@ const activeComponent = computed(() => ROUTES[currentPath.value] ?? ROUTES[DEFAU
   }
 
   .app-shell__main {
-    padding: 2rem 1rem 2.5rem;
+    padding: 2rem clamp(1rem, 6vw, 2rem) 2.5rem;
   }
 }
 </style>

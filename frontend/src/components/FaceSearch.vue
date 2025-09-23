@@ -1,7 +1,7 @@
 <template>
   <section class="face-search">
     <div class="face-search__layout">
-      <aside class="face-search__panel face-search__panel--controls">
+      <aside class="face-search__column face-search__column--upload">
         <form class="face-search__form" @submit.prevent="submitSearch">
           <div class="face-search__form-grid">
             <label class="face-search__file">
@@ -40,179 +40,183 @@
         </div>
       </aside>
 
-      <section class="face-search__workspace">
-        <section v-if="movies.length" class="face-search__results">
-          <aside class="face-search__movies">
-            <header>
-              <h2>Phim phù hợp</h2>
-              <p class="face-search__progress" v-if="overallProgress.total">
-                Đã duyệt {{ overallProgress.confirmed + overallProgress.rejected }}/{{ overallProgress.total }} nhân vật.
-              </p>
-            </header>
+      <section class="face-search__column face-search__column--movies face-search__movies">
+        <template v-if="movies.length">
+          <header>
+            <h2>Phim phù hợp</h2>
+            <p class="face-search__progress" v-if="overallProgress.total">
+              Đã duyệt {{ overallProgress.confirmed + overallProgress.rejected }}/{{ overallProgress.total }} nhân vật.
+            </p>
+          </header>
 
-            <details class="face-search__movie-toggle" open>
-              <summary>Danh sách phim</summary>
-              <ul>
-                <li v-for="movie in movies" :key="movie.movie_id">
-                  <button
-                    type="button"
-                    :class="['face-search__movie-button', { active: movie.movie_id === selectedMovieId }]"
-                    @click="handleSelectMovie(movie.movie_id)"
-                  >
-                    <span class="face-search__movie-title">{{ movie.movie || `Phim #${movie.movie_id}` }}</span>
-                    <span
-                      v-if="movie.match_label"
-                      class="face-search__movie-label"
-                      :data-match-status="movie.match_status || ''"
-                    >
-                      {{ movie.match_label }}
-                    </span>
-                    <span class="face-search__movie-score" v-if="movie.score !== null">
-                      {{ formatScore(movie.score) }}
-                    </span>
-                    <span class="face-search__movie-progress">
-                      {{ movieProgress(movie.movie_id).confirmed }}/{{
-                        movieProgress(movie.movie_id).total || movie.characters.length
-                      }} xác nhận
-                    </span>
-                  </button>
-                </li>
-              </ul>
-            </details>
-          </aside>
-
-          <section class="face-search__details">
-            <template v-if="currentMovie && currentCharacter">
-              <header class="face-search__details-header">
-                <div>
-                  <h2>{{ currentMovie.movie || `Phim #${currentMovie.movie_id}` }}</h2>
-                  <p class="face-search__character-label">
-                    Nhân vật: <strong>{{ currentCharacter.character_id }}</strong>
-                  </p>
-                  <p
-                    v-if="currentMovie.match_label"
-                    class="face-search__movie-match"
-                    :data-match-status="currentMovie.match_status || ''"
-                  >
-                    {{ currentMovie.match_label }}
-                  </p>
-                </div>
-                <div class="face-search__character-meta">
-                  <span
-                    v-if="currentCharacter.match_label"
-                    class="face-search__character-match"
-                    :data-match-status="currentCharacter.match_status || ''"
-                  >
-                    {{ currentCharacter.match_label }}
-                  </span>
-                  <span v-if="currentCharacter.score !== null">Điểm: {{ formatScore(currentCharacter.score) }}</span>
-                  <span v-if="currentCharacter.count">Số lần xuất hiện: {{ currentCharacter.count }}</span>
-                </div>
-              </header>
-
-              <div class="face-search__characters">
-                <button
-                  v-for="character in currentMovie.characters"
-                  :key="character.character_id"
-                  type="button"
-                  :class="[
-                    'face-search__character-button',
-                    {
-                      active: character.character_id === selectedCharacterId,
-                      confirmed: character.verificationStatus === 'confirmed',
-                      rejected: character.verificationStatus === 'rejected',
-                    },
-                  ]"
-                  @click="handleSelectCharacter(currentMovie.movie_id, character.character_id)"
-                >
-                  <span class="face-search__character-id">{{ character.character_id }}</span>
-                  <span
-                    v-if="character.match_label"
-                    class="face-search__character-badge"
-                    :data-match-status="character.match_status || ''"
-                  >
-                    {{ character.match_label }}
-                  </span>
-                  <span class="face-search__character-status" v-if="character.verificationStatus === 'confirmed'">✔</span>
-                  <span class="face-search__character-status" v-else-if="character.verificationStatus === 'rejected'">✖</span>
-                </button>
-              </div>
-
-              <div class="face-search__viewer">
-                <nav v-if="availableDetailTabs.length > 1" class="face-search__tabs" aria-label="Chi tiết cảnh">
-                  <button
-                    v-for="tab in availableDetailTabs"
-                    :key="tab.id"
-                    type="button"
-                    :class="['face-search__tab', { active: tab.id === activeDetailTab }]"
-                    @click="activeDetailTab = tab.id"
-                  >
-                    {{ tab.label }}
-                  </button>
-                </nav>
-
-                <div class="face-search__tab-panel">
-                  <SceneViewer
-                    v-if="activeDetailTab === 'scene'"
-                    :scene="currentScene"
-                    :meta="currentSceneEntry"
-                    :movie-title="currentMovie.movie || `Phim #${currentMovie.movie_id}`"
-                    :character-id="currentCharacter.character_id"
-                    :is-loading="isSceneLoading"
-                  />
-
-                  <section v-else-if="activeDetailTab === 'history'" class="face-search__history">
-                    <h3>Lịch sử xác nhận</h3>
-                    <ul>
-                      <li v-for="(entry, index) in currentCharacter.decisionHistory" :key="index">
-                        <span class="face-search__history-status">{{ historyLabel(entry.status) }}</span>
-                        <span class="face-search__history-meta">
-                          lúc {{ formatTime(entry.at) }}
-                          <template v-if="entry.scene_index !== null">— Cảnh #{{ entry.scene_index + 1 }}</template>
-                        </span>
-                      </li>
-                    </ul>
-                  </section>
-
-                  <section v-else class="face-search__info">
-                    <h3>Thông tin nhân vật</h3>
-                    <dl>
-                      <div v-for="item in detailInfo" :key="item.label">
-                        <dt>{{ item.label }}</dt>
-                        <dd>{{ item.value }}</dd>
-                      </div>
-                    </dl>
-                  </section>
-                </div>
-                <p v-if="sceneError && activeDetailTab === 'scene'" class="face-search__feedback-error">
-                  {{ sceneError }}
-                </p>
-              </div>
-
-              <footer class="face-search__actions">
-                <button type="button" class="confirm" @click="handleDecision('confirmed')" :disabled="!currentCharacter">
-                  Đúng
-                </button>
-                <button type="button" class="reject" @click="handleDecision('rejected')" :disabled="!currentCharacter">
-                  Không phải
-                </button>
+          <details class="face-search__movie-toggle" open>
+            <summary>Danh sách phim</summary>
+            <ul>
+              <li v-for="movie in movies" :key="movie.movie_id">
                 <button
                   type="button"
-                  class="secondary"
-                  @click="loadAnotherScene"
-                  :disabled="isSceneLoading || !canLoadAnotherScene"
+                  :class="['face-search__movie-button', { active: movie.movie_id === selectedMovieId }]"
+                  @click="handleSelectMovie(movie.movie_id)"
                 >
-                  Cảnh khác
+                  <span class="face-search__movie-title">{{ movie.movie || `Phim #${movie.movie_id}` }}</span>
+                  <span
+                    v-if="movie.match_label"
+                    class="face-search__movie-label"
+                    :data-match-status="movie.match_status || ''"
+                  >
+                    {{ movie.match_label }}
+                  </span>
+                  <span class="face-search__movie-score" v-if="movie.score !== null">
+                    {{ formatScore(movie.score) }}
+                  </span>
+                  <span class="face-search__movie-progress">
+                    {{ movieProgress(movie.movie_id).confirmed }}/{{
+                      movieProgress(movie.movie_id).total || movie.characters.length
+                    }} xác nhận
+                  </span>
                 </button>
-              </footer>
-            </template>
-            <p v-else class="face-search__placeholder">Chọn một phim để bắt đầu kiểm tra các cảnh.</p>
-          </section>
-        </section>
-
+              </li>
+            </ul>
+          </details>
+        </template>
         <p v-else-if="hasSearched && !isSearching" class="face-search__no-results">
           Không có phim nào khớp với ảnh đã tải lên.
         </p>
+        <p v-else class="face-search__placeholder">Tải ảnh khuôn mặt để xem các phim phù hợp.</p>
+      </section>
+
+      <section class="face-search__column face-search__column--viewer face-search__details">
+        <template v-if="movies.length">
+          <template v-if="currentMovie && currentCharacter">
+            <header class="face-search__details-header">
+              <div>
+                <h2>{{ currentMovie.movie || `Phim #${currentMovie.movie_id}` }}</h2>
+                <p class="face-search__character-label">
+                  Nhân vật: <strong>{{ currentCharacter.character_id }}</strong>
+                </p>
+                <p
+                  v-if="currentMovie.match_label"
+                  class="face-search__movie-match"
+                  :data-match-status="currentMovie.match_status || ''"
+                >
+                  {{ currentMovie.match_label }}
+                </p>
+              </div>
+              <div class="face-search__character-meta">
+                <span
+                  v-if="currentCharacter.match_label"
+                  class="face-search__character-match"
+                  :data-match-status="currentCharacter.match_status || ''"
+                >
+                  {{ currentCharacter.match_label }}
+                </span>
+                <span v-if="currentCharacter.score !== null">Điểm: {{ formatScore(currentCharacter.score) }}</span>
+                <span v-if="currentCharacter.count">Số lần xuất hiện: {{ currentCharacter.count }}</span>
+              </div>
+            </header>
+
+            <div class="face-search__characters">
+              <button
+                v-for="character in currentMovie.characters"
+                :key="character.character_id"
+                type="button"
+                :class="[
+                  'face-search__character-button',
+                  {
+                    active: character.character_id === selectedCharacterId,
+                    confirmed: character.verificationStatus === 'confirmed',
+                    rejected: character.verificationStatus === 'rejected',
+                  },
+                ]"
+                @click="handleSelectCharacter(currentMovie.movie_id, character.character_id)"
+              >
+                <span class="face-search__character-id">{{ character.character_id }}</span>
+                <span
+                  v-if="character.match_label"
+                  class="face-search__character-badge"
+                  :data-match-status="character.match_status || ''"
+                >
+                  {{ character.match_label }}
+                </span>
+                <span class="face-search__character-status" v-if="character.verificationStatus === 'confirmed'">✔</span>
+                <span class="face-search__character-status" v-else-if="character.verificationStatus === 'rejected'">✖</span>
+              </button>
+            </div>
+
+            <div class="face-search__viewer">
+              <nav v-if="availableDetailTabs.length > 1" class="face-search__tabs" aria-label="Chi tiết cảnh">
+                <button
+                  v-for="tab in availableDetailTabs"
+                  :key="tab.id"
+                  type="button"
+                  :class="['face-search__tab', { active: tab.id === activeDetailTab }]"
+                  @click="activeDetailTab = tab.id"
+                >
+                  {{ tab.label }}
+                </button>
+              </nav>
+
+              <div class="face-search__tab-panel">
+                <SceneViewer
+                  v-if="activeDetailTab === 'scene'"
+                  :scene="currentScene"
+                  :meta="currentSceneEntry"
+                  :movie-title="currentMovie.movie || `Phim #${currentMovie.movie_id}`"
+                  :character-id="currentCharacter.character_id"
+                  :is-loading="isSceneLoading"
+                />
+
+                <section v-else-if="activeDetailTab === 'history'" class="face-search__history">
+                  <h3>Lịch sử xác nhận</h3>
+                  <ul>
+                    <li v-for="(entry, index) in currentCharacter.decisionHistory" :key="index">
+                      <span class="face-search__history-status">{{ historyLabel(entry.status) }}</span>
+                      <span class="face-search__history-meta">
+                        lúc {{ formatTime(entry.at) }}
+                        <template v-if="entry.scene_index !== null">— Cảnh #{{ entry.scene_index + 1 }}</template>
+                      </span>
+                    </li>
+                  </ul>
+                </section>
+
+                <section v-else class="face-search__info">
+                  <h3>Thông tin nhân vật</h3>
+                  <dl>
+                    <div v-for="item in detailInfo" :key="item.label">
+                      <dt>{{ item.label }}</dt>
+                      <dd>{{ item.value }}</dd>
+                    </div>
+                  </dl>
+                </section>
+              </div>
+              <p v-if="sceneError && activeDetailTab === 'scene'" class="face-search__feedback-error">
+                {{ sceneError }}
+              </p>
+            </div>
+
+            <footer class="face-search__actions">
+              <button type="button" class="confirm" @click="handleDecision('confirmed')" :disabled="!currentCharacter">
+                Đúng
+              </button>
+              <button type="button" class="reject" @click="handleDecision('rejected')" :disabled="!currentCharacter">
+                Không phải
+              </button>
+              <button
+                type="button"
+                class="secondary"
+                @click="loadAnotherScene"
+                :disabled="isSceneLoading || !canLoadAnotherScene"
+              >
+                Cảnh khác
+              </button>
+            </footer>
+          </template>
+          <p v-else class="face-search__placeholder">Chọn một phim để bắt đầu kiểm tra các cảnh.</p>
+        </template>
+        <p v-else-if="hasSearched && !isSearching" class="face-search__placeholder">
+          Không có phim nào khớp với ảnh đã tải lên.
+        </p>
+        <p v-else class="face-search__placeholder">Tải ảnh khuôn mặt để xem chi tiết cảnh quay.</p>
       </section>
     </div>
   </section>
@@ -471,30 +475,38 @@ onBeforeUnmount(() => {
   --surface-border: #e2e8f0;
   --surface-radius: 0.75rem;
   --surface-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
-  display: grid;
-  gap: clamp(1.5rem, 3vw, 2.5rem);
 }
 
 .face-search__layout {
   display: grid;
-  grid-template-columns: minmax(260px, clamp(320px, 30vw, 420px)) minmax(0, 1fr);
-  gap: clamp(1.5rem, 3vw, 2.75rem);
+  grid-template-columns: clamp(300px, 24vw, 340px) minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(1.5rem, 3vw, 2.5rem);
   align-items: start;
 }
 
-.face-search__panel {
+.face-search__column {
   background: var(--surface-bg);
   border: 1px solid var(--surface-border);
   border-radius: var(--surface-radius);
   box-shadow: var(--surface-shadow);
-  padding: 1.5rem;
+  padding: clamp(1.25rem, 2vw, 1.75rem);
   display: grid;
-  gap: 1.5rem;
+  gap: clamp(1.25rem, 2vw, 1.75rem);
 }
 
-.face-search__panel--controls {
+.face-search__column--upload {
   position: sticky;
-  top: 1.5rem;
+  top: clamp(1rem, 2vw, 1.5rem);
+  align-self: start;
+}
+
+.face-search__column--movies,
+.face-search__column--viewer {
+  align-self: start;
+}
+
+.face-search__column--viewer {
+  gap: 1.5rem;
 }
 
 .face-search__form {
@@ -630,26 +642,9 @@ button.secondary {
   color: #1d4ed8;
 }
 
-.face-search__workspace {
-  display: grid;
-  gap: clamp(1.25rem, 2.5vw, 1.75rem);
-}
-
-.face-search__results {
-  display: grid;
-  grid-template-columns: minmax(240px, clamp(300px, 28vw, 380px)) minmax(0, 1fr);
-  gap: clamp(1.25rem, 2.5vw, 2rem);
-  align-items: start;
-}
-
 .face-search__movies {
   display: grid;
-  gap: 1rem;
-  background: var(--surface-bg);
-  border: 1px solid var(--surface-border);
-  border-radius: var(--surface-radius);
-  box-shadow: var(--surface-shadow);
-  padding: 1.25rem;
+  gap: 1.25rem;
 }
 
 .face-search__movies header {
@@ -764,11 +759,6 @@ button.secondary {
 }
 
 .face-search__details {
-  background: var(--surface-bg);
-  border: 1px solid var(--surface-border);
-  border-radius: var(--surface-radius);
-  box-shadow: var(--surface-shadow);
-  padding: 1.5rem;
   display: grid;
   gap: 1.5rem;
 }
@@ -954,10 +944,14 @@ face-search__actions {
   text-align: center;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1280px) {
   .face-search__layout {
-    grid-template-columns: minmax(240px, clamp(280px, 40vw, 340px)) minmax(0, 1fr);
-    gap: clamp(1.25rem, 3vw, 2rem);
+    grid-template-columns: clamp(260px, 32vw, 320px) minmax(0, 1fr);
+    gap: clamp(1.25rem, 3vw, 2.25rem);
+  }
+
+  .face-search__column--viewer {
+    grid-column: 1 / -1;
   }
 }
 
@@ -966,19 +960,13 @@ face-search__actions {
     grid-template-columns: 1fr;
   }
 
-  .face-search__panel--controls {
+  .face-search__column--upload {
     position: static;
-  }
-
-  .face-search__results {
-    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 640px) {
-  .face-search__panel,
-  .face-search__movies,
-  .face-search__details {
+  .face-search__column {
     padding: 1.25rem;
   }
 
