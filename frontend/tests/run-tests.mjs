@@ -83,20 +83,27 @@ const sceneBoxes = collectBoxesFromScene({ bbox: [0, 0, 100, 100], boxes: [[10, 
 assert.equal(sceneBoxes.length, 2, 'Scene-level boxes should merge bbox and boxes array')
 
 const timeline = [
-  { clip_offset: 0, duration: 2.5, bbox: [0, 0, 100, 100] },
-  { clip_offset: 2.5, duration: 2.5, bbox: [50, 50, 150, 150] },
+  { timestamp: 10, clip_offset: 0, duration: 2.5, bbox: [0, 0, 100, 100] },
+  { timestamp: 12.5, clip_offset: 2.5, duration: 2.5, bbox: [50, 50, 150, 150] },
 ]
-const selectedEarly = pickActiveTimelineEntry(timeline, 0.6, 2)
+const selectedEarly = pickActiveTimelineEntry(timeline, 10.6, { fps: 2, sceneStart: 10 })
 assert.strictEqual(
   selectedEarly,
   timeline[0],
   'Timeline entry before transition should use the first segment',
 )
-const selectedLate = pickActiveTimelineEntry(timeline, 4.9, 2)
+const selectedLate = pickActiveTimelineEntry(timeline, 14.9, { fps: 2, sceneStart: 10 })
 assert.strictEqual(
   selectedLate,
   timeline[1],
   'Timeline selection should advance when clip_offset increases',
+)
+
+const legacySelected = pickActiveTimelineEntry(timeline, 0.6, 2)
+assert.strictEqual(
+  legacySelected,
+  timeline[0],
+  'Legacy selection should still support clip-based offsets',
 )
 
 const timelineBoxes = collectBoxesFromTimelineEntry(selectedLate)
@@ -109,10 +116,10 @@ assert.deepEqual(
 )
 
 const overlay = computeOverlayBoxes(
-  { timeline, clip_fps: 2 },
+  { timeline, clip_fps: 2, start_time: 10 },
   200,
   200,
-  4.9,
+  14.9,
 )
 assert.equal(overlay.length, 1, 'Overlay helper should honour active timeline entries')
 assert.equal(
@@ -177,6 +184,7 @@ const normalisedMetadata = ensureFrameMetadata({
   frame: '/frames/example.jpg',
   preview_image: 'previews/example.jpg',
   clip_url: '/clips/example.mp4',
+  video_url: '/videos/example.mp4',
   timeline: [
     {
       frame_url: 'frames/nested.jpg',
@@ -200,6 +208,11 @@ assert.equal(
   normalisedMetadata.clip_url,
   'http://localhost:8000/clips/example.mp4',
   'Clip URLs should resolve to the API host',
+)
+assert.equal(
+  normalisedMetadata.video_url,
+  'http://localhost:8000/videos/example.mp4',
+  'Video URLs should resolve to the API host',
 )
 assert.equal(
   normalisedMetadata.timeline[0].frame,

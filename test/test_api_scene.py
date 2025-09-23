@@ -13,6 +13,7 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
     characters_path = tmp_path / "characters.json"
     clips_root = tmp_path / "clips"
 
+    videos_root = tmp_path / "videos"
     movie_key = "movie1"
     character_key = "char1"
     movie_folder = "MOVIE_FOLDER"
@@ -29,6 +30,12 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
     clip_file.parent.mkdir(parents=True, exist_ok=True)
     clip_file.write_bytes(b"clip-bytes")
 
+    video_rel = os.path.join(movie_folder, "movie.mp4")
+    video_file = videos_root / video_rel
+    video_file.parent.mkdir(parents=True, exist_ok=True)
+    video_file.write_bytes(b"video-bytes")
+
+
     characters = {
         movie_key: {
             character_key: {
@@ -43,18 +50,21 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
                                 "frame": frame_name,
                                 "frame_index": 5,
                                 "bbox": [10, 20, 110, 200],
-                                "clip_offset": 0.0,
+                                "timestamp": 12.5,
                             },
                             {
                                 "frame": "frame_0002.jpg",
                                 "frame_index": 6,
                                 "bbox": [12, 22, 112, 202],
-                                "clip_offset": 0.5,
+                                "timestamp": 13.0,
                                 "duration": 0.5,
                             },
                         ],
-                        "clip_path": clip_rel.replace(os.sep, "/"),
-                        "clip_fps": 8.0,
+                        "video_source": video_rel.replace(os.sep, "/"),
+                        "video_start_timestamp": 12.5,
+                        "video_end_timestamp": 17.5,
+                        "start_time": 12.5,
+                        "end_time": 17.5,
                         "duration": 5.0,
                         "width": 640,
                         "height": 360,
@@ -69,7 +79,7 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
         "storage": {
             "frames_root": str(frames_root),
             "cluster_previews_root": str(previews_root),
-            "scene_clips_root": str(clips_root),
+            "video_root": str(videos_root),
             "characters_json": str(characters_path),
         }
     }
@@ -95,10 +105,9 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             assert scene["frame"].startswith(main.FRAMES_ROUTE)
             assert scene.get("frame_url", "").startswith(main.FRAMES_ROUTE)
             assert scene.get("frame_name") == frame_name
-            assert scene.get("clip").startswith(main.CLIPS_ROUTE)
-            assert scene.get("clip_url") == scene.get("clip")
-            assert scene.get("clip_path") == clip_rel.replace(os.sep, "/")
-            assert scene.get("clip_fps") == 8.0
+            assert scene.get("video_url", "").startswith(main.VIDEOS_ROUTE)
+            assert scene.get("video_source") == video_rel.replace(os.sep, "/")
+            assert scene.get("start_time") == 12.5
             assert scene.get("duration") == 5.0
             assert scene.get("width") == 640
             assert scene.get("height") == 360
@@ -107,10 +116,10 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             assert isinstance(timeline, list) and len(timeline) == 2
             assert timeline[0]["bbox"] == [10, 20, 110, 200]
             assert timeline[0]["frame"].startswith(main.FRAMES_ROUTE)
-            assert timeline[1]["clip_offset"] == 0.5
+            assert timeline[1]["timestamp"] == 13.0
 
-            clip_response = client.get(scene["clip"])
-            assert clip_response.status_code == 200
+            video_response = client.get(scene["video_url"])
+            assert video_response.status_code == 200
 
             image_response = client.get(scene["frame"])
             assert image_response.status_code == 200
@@ -124,10 +133,12 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
     previews_root = tmp_path / "previews"
     characters_path = tmp_path / "characters.json"
     clips_root = tmp_path / "clips"
+    videos_root = tmp_path / "videos"
 
     movie_folder = "MOVIE_FOLDER"
     frame_name = "frame_0002.jpg"
     preview_rel = "clusters/example.jpg"
+    video_rel = os.path.join(movie_folder, "movie.mp4")
 
     frame_file = frames_root / movie_folder / frame_name
     frame_file.parent.mkdir(parents=True, exist_ok=True)
@@ -144,6 +155,7 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
             "frames_root": str(frames_root),
             "cluster_previews_root": str(previews_root),
             "scene_clips_root": str(clips_root),
+            "video_root": str(videos_root),
             "characters_json": str(characters_path),
         }
     }
@@ -172,6 +184,11 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
                                 "bbox": [0, 0, 50, 60],
                                 "clip_path": "MOVIE_FOLDER/char1/track1.mp4",
                                 "clip_fps": 8.0,
+                                "video_source": video_rel.replace(os.sep, "/"),
+                                "start_time": 1.5,
+                                "duration": 5.0,
+                                "video_start_timestamp": 1.5,
+                                "video_end_timestamp": 6.5,
                                 "duration": 5.0,
                                 "width": 640,
                                 "height": 360,
@@ -180,7 +197,7 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
                                         "frame": frame_name,
                                         "frame_index": 5,
                                         "bbox": [0, 0, 50, 60],
-                                        "clip_offset": 0.0,
+                                        "timestamp": 1.5,
                                     }
                                 ],
                             },
@@ -188,8 +205,8 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
                                 {
                                     "frame": frame_name,
                                     "bbox": [0, 0, 50, 60],
-                                    "clip_path": "MOVIE_FOLDER/char1/track1.mp4",
-                                    "clip_fps": 8.0,
+                                    "video_source": video_rel.replace(os.sep, "/"),
+                                    "start_time": 1.5,
                                     "duration": 5.0,
                                     "width": 640,
                                     "height": 360,
@@ -198,7 +215,7 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
                                             "frame": frame_name,
                                             "frame_index": 5,
                                             "bbox": [0, 0, 50, 60],
-                                            "clip_offset": 0.0,
+                                            "timestamp": 1.5,
                                         }
                                     ],
                                 }
@@ -243,14 +260,14 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
             assert scene["frame"].startswith(main.FRAMES_ROUTE)
             assert scene["frame_url"] == scene["frame"]
             assert scene["frame_name"] == frame_name
-            assert scene["clip"].startswith(main.CLIPS_ROUTE)
-            assert scene["clip_url"] == scene["clip"]
+            assert scene["video_url"].startswith(main.VIDEOS_ROUTE)
+            assert scene["start_time"] == 1.5
             assert scene["timeline"][0]["bbox"] == [0, 0, 50, 60]
 
             scenes = character.get("scenes")
             assert scenes and scenes[0]["frame"].startswith(main.FRAMES_ROUTE)
             assert scenes[0]["frame_name"] == frame_name
-            assert scenes[0]["clip"].startswith(main.CLIPS_ROUTE)
+            assert scenes[0]["video_url"].startswith(main.VIDEOS_ROUTE)
 
             preview_entry = character["previews"][0]
             assert preview_entry["frame"].startswith(main.FRAMES_ROUTE)

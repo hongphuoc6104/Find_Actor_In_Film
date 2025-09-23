@@ -1,7 +1,7 @@
 """FastAPI application exposing the face recognition service."""
 
 from __future__ import annotations
-
+import math
 import json
 import logging
 import os
@@ -23,7 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRAMES_ROUTE = "/frames"
 PREVIEWS_ROUTE = "/previews"
 CLIPS_ROUTE = "/clips"
-
+VIDEOS_ROUTE = "/videos"
 logger = logging.getLogger(__name__)
 
 
@@ -70,6 +70,22 @@ def _resolve_scene_clips_root() -> Path | None:
         clips_root = PROJECT_ROOT / clips_root
 
     return clips_root
+
+def _resolve_video_root() -> Path | None:
+    """Return the absolute path configured for source video files."""
+
+    storage_cfg = load_config().get("storage", {})
+    raw_root = storage_cfg.get("video_root")
+    if not raw_root:
+        return None
+
+    video_root = Path(raw_root)
+    if not video_root.is_absolute():
+        video_root = PROJECT_ROOT / video_root
+
+    return video_root
+
+
 
 
 def _resolve_characters_path() -> Path:
@@ -194,7 +210,7 @@ def _get_character(movie_id: str, character_id: str) -> Dict[str, Any] | None:
 FRAMES_ROOT = _resolve_frames_root()
 PREVIEWS_ROOT = _resolve_previews_root()
 SCENE_CLIPS_ROOT = _resolve_scene_clips_root()
-
+VIDEO_ROOT = _resolve_video_root()
 app = FastAPI(title="Find Actor in Film API")
 
 DEV_ORIGINS = [
@@ -232,6 +248,14 @@ if SCENE_CLIPS_ROOT:
         CLIPS_ROUTE,
         StaticFiles(directory=str(SCENE_CLIPS_ROOT)),
         name="clips",
+    )
+
+if VIDEO_ROOT:
+    VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        VIDEOS_ROUTE,
+        StaticFiles(directory=str(VIDEO_ROOT)),
+        name="videos",
     )
 
 
@@ -324,6 +348,12 @@ def _build_clip_url(path: str) -> str:
 
     return _build_static_url(path, SCENE_CLIPS_ROOT, CLIPS_ROUTE)
 
+def _build_video_url(path: str) -> str:
+    """Convert a source video path into an API URL."""
+
+    return _build_static_url(path, VIDEO_ROOT, VIDEOS_ROUTE)
+
+
 
 def _convert_scene_entry(
     scene: Any,
@@ -350,13 +380,101 @@ def _convert_scene_entry(
         converted, movie=effective_movie, movie_id=effective_movie_id
     )
 
+    def _parse_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(result):
+            return None
+        return float(result)
+
+    video_source = None
+    for key in (
+        "video_source",
+        "video_path",
+        "video",
+        "videoFile",
+        "video_source_path",
+        "source_video",
+    ):
+        value = converted.get(key)
+        if isinstance(value, str) and value:
+            video_source = value
+            break
+
+    if isinstance(video_source, str) and video_source:
+        video_source = os.path.basename(video_source)
+        converted["video_source"] = video_source
+        video_url = _build_video_url(video_source)
+        converted["video_url"] = video_url
+        converted.setdefault("video", video_url)
+    else:
+        video_url = converted.get("video_url")
+
+    start_time = None
+    end_time = None
+    duration = None
+
+    start_candidates = (
+        converted.get("start_time"),
+        converted.get("video_start_timestamp"),
+        converted.get("clip_start_timestamp"),
+        converted.get("timestamp"),
+    )
+    for candidate in start_candidates:
+        parsed = _parse_float(candidate)
+        if parsed is not None:
+            start_time = parsed
+            break
+
+    end_candidates = (
+        converted.get("end_time"),
+        converted.get("video_end_timestamp"),
+        converted.get("end_timestamp"),
+    )
+    for candidate in end_candidates:
+        parsed = _parse_float(candidate)
+        if parsed is not None:
+            end_time = parsed
+            break
+
+    duration_candidates = (
+        converted.get("duration"),
+        converted.get("video_duration"),
+        converted.get("clip_duration"),
+    )
+    for candidate in duration_candidates:
+        parsed = _parse_float(candidate)
+        if parsed is not None:
+            duration = parsed
+            break
+
+    if duration is None and start_time is not None and end_time is not None:
+        diff = end_time - start_time
+        if diff >= 0:
+            duration = round(diff, 3)
+
+    if start_time is not None:
+        converted["start_time"] = start_time
+        converted["video_start_timestamp"] = start_time
+    if end_time is not None:
+        converted["end_time"] = end_time
+        converted["video_end_timestamp"] = end_time
+    if duration is not None:
+        converted["duration"] = duration
+
+
     clip_source = converted.get("clip_path") or converted.get("clip")
     if isinstance(clip_source, str) and clip_source:
         clip_url = _build_clip_url(clip_source)
         converted["clip_path"] = clip_source
         converted["clip"] = clip_url
         converted["clip_url"] = clip_url
-
+    else:
+        clip_url = converted.get("clip_url")
     timeline = converted.get("timeline")
     if isinstance(timeline, list):
         converted["timeline"] = []

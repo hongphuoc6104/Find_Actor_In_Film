@@ -4,6 +4,7 @@ import glob
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import cv2
@@ -38,6 +39,21 @@ def _timestamp_from_frame(frame_idx: int, fps: float | None) -> float | None:
     if fps is None or fps <= 0 or frame_idx < 0:
         return None
     return round(frame_idx / fps, 3)
+
+
+def _parse_time(value: Any) -> float | None:
+    """Convert ``value`` to a finite float timestamp if possible."""
+
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(result):
+        return None
+    return float(result)
+
 
 
 def _as_array(value: Any) -> np.ndarray:
@@ -416,145 +432,6 @@ def _select_clip_frames(
     return frame_records[window_start : window_end + 1]
 
 
-import subprocess
-
-def _export_track_clip(
-    frame_records: List[Dict[str, Any]],
-    clips_root: str | None,
-    movie_name: str,
-    character_id: str,
-    track_id: Any,
-    clip_fps: float | None,
-) -> Dict[str, Any]:
-    """Persist a short MP4 clip for the provided frames using ffmpeg (libx264)."""
-    if not clips_root or not frame_records:
-        return {
-            "clip_path": None,
-            "width": None,
-            "height": None,
-            "fps": None,
-            "duration": None,
-            "timeline_indices": [],
-        }
-
-    clips_root_abs = os.path.abspath(clips_root)
-    os.makedirs(clips_root_abs, exist_ok=True)
-
-    movie_slug = _safe_slug(movie_name, "movie")
-    char_slug = _safe_slug(character_id, "character")
-    track_slug = _safe_slug(track_id, "track") if track_id is not None else "track"
-
-    clip_dir = os.path.join(clips_root_abs, movie_slug, char_slug)
-    os.makedirs(clip_dir, exist_ok=True)
-
-    filename = f"{movie_slug}_{char_slug}_{track_slug}.mp4"
-    output_path = os.path.join(clip_dir, filename)
-
-    fps_value = clip_fps if clip_fps and clip_fps > 0 else DEFAULT_CLIP_FPS
-    selected_records = _select_clip_frames(frame_records, fps_value)
-
-    # Lấy width/height từ frame đầu tiên
-    width, height = None, None
-    for rec in selected_records:
-        frame = cv2.imread(rec["frame_path"])
-        if frame is not None:
-            height, width = frame.shape[:2]
-            break
-    if width is None or height is None:
-        return {
-            "clip_path": None,
-            "width": None,
-            "height": None,
-            "fps": None,
-            "duration": None,
-            "timeline_indices": [],
-        }
-
-    # Xóa file cũ nếu tồn tại
-    if os.path.exists(output_path):
-        try:
-            os.remove(output_path)
-        except OSError:
-            pass
-
-    # Chuẩn bị ffmpeg CLI
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "rawvideo",
-        "-vcodec", "rawvideo",
-        "-pix_fmt", "bgr24",
-        "-s", f"{width}x{height}",
-        "-r", str(fps_value),
-        "-i", "-",  # stdin
-        "-an",
-        "-vcodec", "libx264",
-        "-pix_fmt", "yuv420p",
-        output_path,
-    ]
-    process = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-
-    used_indices: List[int] = []
-    clip_start_frame_index = clip_end_frame_index = None
-    clip_start_timeline_index = clip_end_timeline_index = None
-
-    try:
-        for rec in selected_records:
-            frame = cv2.imread(rec["frame_path"])
-            if frame is None:
-                continue
-            if frame.shape[:2] != (height, width):
-                frame = cv2.resize(frame, (width, height))
-            process.stdin.write(frame.tobytes())
-
-            # Ghi lại timeline index
-            entry_index = rec.get("timeline_index")
-            if entry_index is not None:
-                used_indices.append(int(entry_index))
-                if clip_start_timeline_index is None:
-                    clip_start_timeline_index = int(entry_index)
-                clip_end_timeline_index = int(entry_index)
-
-            # Ghi lại frame index
-            frame_idx_val = rec.get("frame_index")
-            if frame_idx_val is not None:
-                if clip_start_frame_index is None:
-                    clip_start_frame_index = int(frame_idx_val)
-                clip_end_frame_index = int(frame_idx_val)
-    finally:
-        process.stdin.close()
-        process.wait()
-
-    if not used_indices:
-        if os.path.exists(output_path):
-            try:
-                os.remove(output_path)
-            except OSError:
-                pass
-        return {
-            "clip_path": None,
-            "width": None,
-            "height": None,
-            "fps": None,
-            "duration": None,
-            "timeline_indices": [],
-        }
-
-    rel_path = os.path.relpath(output_path, clips_root_abs)
-    duration = len(used_indices) / float(fps_value)
-    return {
-        "clip_path": rel_path.replace(os.sep, "/"),
-        "width": int(width),
-        "height": int(height),
-        "fps": float(fps_value),
-        "duration": round(duration, 3),
-        "timeline_indices": used_indices,
-        "clip_start_index": clip_start_timeline_index,
-        "clip_end_index": clip_end_timeline_index,
-        "clip_start_frame_index": clip_start_frame_index,
-        "clip_end_frame_index": clip_end_frame_index,
-    }
-
-
 @task(name="Build Character Profiles Task")
 def character_task():
     """Xây dựng hồ sơ nhân vật riêng cho từng phim."""
@@ -569,10 +446,15 @@ def character_task():
     output_json_path = storage_cfg["characters_json"]
     merged_parquet_path = storage_cfg.get("clusters_merged_parquet")
     frames_root = storage_cfg.get("frames_root")
-    clips_root = storage_cfg.get("scene_clips_root")
-    clips_root_abs = os.path.abspath(clips_root) if clips_root else None
-    if clips_root_abs:
-        os.makedirs(clips_root_abs, exist_ok=True)
+    video_root = storage_cfg.get("video_root")
+    video_root_path: Path | None = None
+    if video_root:
+        video_root_path = Path(video_root)
+        if not video_root_path.is_absolute():
+            video_root_path = (Path.cwd() / video_root_path).resolve()
+        else:
+            video_root_path = video_root_path.resolve()
+
 
     print(f"[Character] Loading clustered data from {clusters_path}...")
 
@@ -600,22 +482,124 @@ def character_task():
             )
         ).to_dict()
 
-    fps_by_movie: Dict[str, float] = {}
+    movie_media_meta: Dict[str, Dict[str, Any]] = {}
+
+    def _store_media_meta(
+        keys: List[str],
+        *,
+        fps_value: float | None = None,
+        video_source: str | None = None,
+    ) -> None:
+        for key in keys:
+            if not key:
+                continue
+            movie_key = str(key)
+            entry = movie_media_meta.setdefault(movie_key, {})
+            if fps_value is not None:
+                entry["fps"] = float(fps_value)
+            if video_source:
+                entry["video_source"] = video_source
+
+    def _normalise_video_source(path_value: Any) -> str | None:
+        if path_value is None:
+            return None
+        try:
+            candidate = Path(str(path_value))
+        except Exception:
+            return None
+        if video_root_path is not None:
+            if not candidate.is_absolute():
+                candidate = video_root_path / candidate
+            try:
+                candidate = candidate.resolve()
+            except OSError:
+                candidate = candidate.absolute()
+            try:
+                relative = candidate.relative_to(video_root_path)
+                return relative.as_posix()
+            except ValueError:
+                return candidate.as_posix()
+        return candidate.as_posix()
+
     metadata_path = storage_cfg.get("metadata_json")
     if metadata_path and os.path.exists(metadata_path):
         try:
             with open(metadata_path, "r", encoding="utf-8") as f:
                 metadata = json.load(f)
-            for movie_name, info in metadata.items():
-                fps = info.get("fps") or info.get("FPS")
-                if fps:
-                    try:
-                        fps_by_movie[str(movie_name)] = float(fps)
-                    except (TypeError, ValueError):
-                        continue
         except (OSError, json.JSONDecodeError):
             print(f"[WARN] Could not read metadata file at {metadata_path}")
+        else:
+            if isinstance(metadata, dict):
+                for movie_key, info in metadata.items():
+                    info_dict: Dict[str, Any] = (
+                        info if isinstance(info, dict) else {}
+                    )
+                    fps_candidates = [
+                        info_dict.get("fps"),
+                        info_dict.get("FPS"),
+                    ]
+                    video_candidate = info_dict.get("video_source") or info_dict.get(
+                        "video_path"
+                    )
 
+                    nested_video = info_dict.get("video") or info_dict.get(
+                        "video_info"
+                    )
+                    if isinstance(nested_video, dict):
+                        fps_candidates.extend(
+                            [nested_video.get("fps"), nested_video.get("FPS")]
+                        )
+                        for key in ("source", "path", "video_path", "file"):
+                            if video_candidate:
+                                break
+                            value = nested_video.get(key)
+                            if isinstance(value, str) and value:
+                                video_candidate = value
+                    elif isinstance(nested_video, str) and not video_candidate:
+                        video_candidate = nested_video
+
+                    for key in ("source", "path", "video", "file"):
+                        if video_candidate:
+                            break
+                        value = info_dict.get(key)
+                        if isinstance(value, str) and value:
+                            video_candidate = value
+
+                    fps_value = None
+                    for candidate in fps_candidates:
+                        parsed = _parse_time(candidate)
+                        if parsed is not None:
+                            fps_value = parsed
+                            break
+
+                    video_source = _normalise_video_source(video_candidate)
+
+                    alias_keys = {str(movie_key)}
+                    for alias_key in (
+                        "movie",
+                        "movie_name",
+                        "movie_folder",
+                        "folder",
+                        "name",
+                        "title",
+                        "movie_id",
+                    ):
+                        alias_value = info_dict.get(alias_key)
+                        if alias_value is None:
+                            continue
+                        try:
+                            alias_str = str(alias_value)
+                        except Exception:
+                            continue
+                        if alias_str:
+                            alias_keys.add(alias_str)
+
+                    if fps_value is not None or video_source:
+                        _store_media_meta(
+                            list(alias_keys),
+                            fps_value=fps_value,
+                            video_source=video_source,
+                        )
     full_embeddings: pd.DataFrame | None = None
     if embeddings_path and os.path.exists(embeddings_path):
         full_embeddings = pd.read_parquet(embeddings_path)
@@ -641,7 +625,30 @@ def character_task():
     for movie_id, movie_group in clusters_df.groupby("movie_id"):
         movie_group = movie_group.copy()
         movie_name = movie_name_by_id.get(movie_id, str(movie_id))
-        fps = fps_by_movie.get(movie_name)
+
+
+        meta_candidates: List[Dict[str, Any]] = []
+        if movie_name:
+            candidate = movie_media_meta.get(str(movie_name))
+            if isinstance(candidate, dict):
+                meta_candidates.append(candidate)
+        candidate = movie_media_meta.get(str(movie_id))
+        if isinstance(candidate, dict):
+            meta_candidates.append(candidate)
+
+        movie_meta: Dict[str, Any] = {}
+        for candidate in meta_candidates:
+            for key, value in candidate.items():
+                if value is None:
+                    continue
+                movie_meta[key] = value
+
+        fps_value = _parse_time(movie_meta.get("fps"))
+        if fps_value is None:
+            fps_value = _parse_time(movie_meta.get("video_fps"))
+        fps = fps_value
+        video_source = movie_meta.get("video_source")
+
 
         print(f"[Character] Processing movie_id={movie_id} ({movie_name})")
         centroids = (
@@ -768,113 +775,32 @@ def character_task():
                             continue
 
                         clip_fps_value = float(fps) if fps else DEFAULT_CLIP_FPS
-                        clip_rel_path = None
-                        clip_width = None
-                        clip_height = None
-                        clip_duration = None
-                        used_entry_indices: List[int] = []
-                        clip_export: Dict[str, Any] | None = None
-
-                        if clips_root_abs and frame_records:
-                            clip_export = _export_track_clip(
-                                frame_records,
-                                clips_root_abs,
-                                movie_name,
-                                str(final_id),
-                                track_key,
-                                clip_fps_value,
-                            )
-                            if clip_export:
-                                clip_rel_path = clip_export.get("clip_path")
-                                clip_width = clip_export.get("width")
-                                clip_height = clip_export.get("height")
-                                clip_duration = clip_export.get("duration")
-                                clip_fps_result = clip_export.get("fps")
-                                used_entry_indices = clip_export.get(
-                                    "timeline_indices", []
-                                )
-                                if clip_fps_result:
-                                    clip_fps_value = float(clip_fps_result)
-
-                        if clip_rel_path and used_entry_indices:
-                            unique_indices = sorted(dict.fromkeys(used_entry_indices))
-                            timeline_to_store = [
-                                timeline_entries[idx]
-                                for idx in unique_indices
-                                if 0 <= idx < len(timeline_entries)
-                            ]
-                        else:
-                            timeline_to_store = timeline_entries
+                        timeline_to_store = timeline_entries
 
                         if not timeline_to_store:
                             continue
-
-                        if (
-                                clip_duration is None
-                                and clip_fps_value
-                                and clip_rel_path
-                        ):
-                            clip_duration = round(
-                                len(timeline_to_store) / float(clip_fps_value), 3
-                            )
-
-                        if clip_width is None or clip_height is None:
-                            sample_path = None
-                            if frame_records:
-                                sample_path = frame_records[0][1]
-                            if (
-                                    sample_path
-                                    and os.path.exists(sample_path)
-                            ):
-                                sample_path = frame_records[0].get("frame_path")
-                            if sample_path and os.path.exists(sample_path):
-                                sample_img = cv2.imread(sample_path)
-                                if sample_img is not None:
-                                    clip_height, clip_width = sample_img.shape[:2]
-
-                        clip_start_frame_idx = None
-                        clip_start_timeline_idx = None
-                        clip_end_timeline_idx = None
-                        if clip_rel_path and clip_export:
-                            clip_start_frame_idx = clip_export.get(
-                                "clip_start_frame_index"
-                            )
-                            clip_start_timeline_idx = clip_export.get(
-                                "clip_start_index"
-                            )
-                            clip_end_timeline_idx = clip_export.get(
-                                "clip_end_index"
-                            )
-
-                        if clip_start_frame_idx is None:
-                            for candidate in timeline_to_store:
-                                idx_val = candidate.get("frame_index")
-                                if idx_val is not None:
-                                    clip_start_frame_idx = idx_val
-                                    break
+                        base_timestamp = None
 
                         for seq_idx, entry in enumerate(timeline_to_store):
                             entry["order"] = seq_idx
-                            if clip_rel_path:
-                                entry["clip_offset"] = round(
-                                    seq_idx / clip_fps_value, 3
-                                )
-                                if (
-                                        clip_start_frame_idx is not None
-                                        and entry.get("frame_index") is not None
-                                ):
-                                    offset_val = (
-                                            (entry["frame_index"] - clip_start_frame_idx)
-                                            / float(clip_fps_value)
-                                    )
-                                else:
-                                    offset_val = seq_idx / float(clip_fps_value)
-                                entry["clip_offset"] = round(offset_val, 3)
 
-                        scene_frame_count += len(timeline_to_store)
+                            ts_val = _parse_time(entry.get("timestamp"))
+                            if base_timestamp is None and ts_val is not None:
+                                base_timestamp = ts_val
+                            if base_timestamp is not None and ts_val is not None:
+                                offset_val = max(ts_val - base_timestamp, 0.0)
+                                rounded_offset = round(offset_val, 3)
+                                entry["clip_offset"] = rounded_offset
+                                entry.setdefault("relative_time", rounded_offset)
+                                entry.setdefault("relative_timestamp", rounded_offset)
+                                entry.setdefault("relative_offset", rounded_offset)
+                            elif clip_fps_value:
+                                fallback_offset = round(seq_idx / float(clip_fps_value), 3)
+                                entry.setdefault("clip_offset", fallback_offset)
+                                entry.setdefault("relative_time", fallback_offset)
+                                entry.setdefault("relative_timestamp", fallback_offset)
+                                entry.setdefault("relative_offset", fallback_offset)
 
-                        first_entry = timeline_to_store[0]
-                        last_entry = timeline_to_store[-1]
                         clip_start_entry = timeline_to_store[0]
                         clip_end_entry = timeline_to_store[-1]
                         focus_entry = next(
@@ -885,6 +811,59 @@ def character_task():
                             ),
                             clip_start_entry,
                         )
+                        clip_start_frame_idx: int | None = None
+                        for candidate in timeline_to_store:
+                            idx_val = candidate.get("frame_index")
+                            if idx_val is None:
+                                continue
+                            try:
+                                clip_start_frame_idx = int(idx_val)
+                            except (TypeError, ValueError):
+                                clip_start_frame_idx = None
+                            else:
+                                break
+
+                        clip_start_timeline_idx = clip_start_entry.get("order", 0)
+                        clip_end_timeline_idx = clip_end_entry.get(
+                            "order", len(timeline_to_store) - 1
+                        )
+
+                        width = None
+                        height = None
+                        for record in frame_records:
+                            frame_path = record.get("frame_path")
+                            if not frame_path or not os.path.exists(frame_path):
+                                continue
+                            sample_img = cv2.imread(frame_path)
+                            if sample_img is None:
+                                continue
+                            height, width = sample_img.shape[:2]
+                            break
+
+                        scene_frame_count += len(timeline_to_store)
+
+                        start_timestamp = _parse_time(clip_start_entry.get("timestamp"))
+                        end_timestamp = _parse_time(clip_end_entry.get("timestamp"))
+                        focus_timestamp = _parse_time(focus_entry.get("timestamp"))
+
+                        if start_timestamp is not None:
+                            start_timestamp = round(start_timestamp, 3)
+                        if end_timestamp is not None:
+                            end_timestamp = round(end_timestamp, 3)
+                        if focus_timestamp is not None:
+                            focus_timestamp = round(focus_timestamp, 3)
+
+                        duration_value = None
+                        if start_timestamp is not None and end_timestamp is not None:
+                            duration_value = max(end_timestamp - start_timestamp, 0.0)
+                        if duration_value is None and clip_fps_value:
+                            duration_value = len(timeline_to_store) / float(clip_fps_value)
+                        if duration_value is not None:
+                            duration_value = round(duration_value, 3)
+
+                        scene_timestamp = focus_timestamp
+                        if scene_timestamp is None:
+                            scene_timestamp = start_timestamp
 
                         try:
                             track_int = int(track_key)
@@ -894,44 +873,43 @@ def character_task():
                         scene_entry = {
                             "order": order_idx,
                             "track_id": track_int,
-                            "frame": first_entry.get("frame"),
-                            "frame_index": first_entry.get("frame_index"),
-                            "timestamp": first_entry.get("timestamp"),
-                            "bbox": first_entry.get("bbox"),
-                            "det_score": first_entry.get("det_score"),
-                            "frame": focus_entry.get("frame"),
-                            "frame_index": focus_entry.get("frame_index"),
-                            "timestamp": focus_entry.get("timestamp"),
+                            "frame": focus_entry.get("frame")
+                                     or clip_start_entry.get("frame"),
+                            "frame_index": focus_entry.get("frame_index")
+                            if focus_entry.get("frame_index") is not None
+                            else clip_start_entry.get("frame_index"),
+                            "timestamp": scene_timestamp
+                            if scene_timestamp is not None
+                            else focus_entry.get("timestamp"),
                             "bbox": focus_entry.get("bbox"),
                             "det_score": focus_entry.get("det_score"),
                             "timeline": timeline_to_store,
                             "frame_count": len(timeline_to_store),
-                            "clip_path": clip_rel_path,
+                            "clip_path": None,
                             "clip_fps": float(clip_fps_value)
                             if clip_fps_value
                             else None,
-                            "duration": clip_duration
-                            if clip_duration is not None
-                            else (
-                                round(
-                                    len(timeline_to_store) / float(clip_fps_value), 3
-                                )
-                                if clip_fps_value
-                                else None
-                            ),
-                            "end_frame": last_entry.get("frame"),
-                            "end_frame_index": last_entry.get("frame_index"),
-                            "end_timestamp": last_entry.get("timestamp"),
-                            "clip_start_frame": clip_start_entry.get("frame"),
-                            "clip_start_frame_index": clip_start_entry.get("frame_index"),
-                            "clip_start_timestamp": clip_start_entry.get("timestamp"),
-                            "clip_start_index": clip_start_timeline_idx,
-                            "clip_end_index": clip_end_timeline_idx,
+                            "duration": duration_value,
                             "end_frame": clip_end_entry.get("frame"),
                             "end_frame_index": clip_end_entry.get("frame_index"),
-                            "end_timestamp": clip_end_entry.get("timestamp"),
-                            "width": clip_width,
-                            "height": clip_height,
+                            "end_timestamp": end_timestamp
+                            if end_timestamp is not None
+                            else clip_end_entry.get("timestamp"),
+                            "clip_start_frame": clip_start_entry.get("frame"),
+                            "clip_start_frame_index": clip_start_frame_idx,
+                            "clip_start_timestamp": start_timestamp
+                            if start_timestamp is not None
+                            else clip_start_entry.get("timestamp"),
+                            "clip_start_index": clip_start_timeline_idx,
+                            "clip_end_index": clip_end_timeline_idx,
+                            "width": int(width) if width else None,
+                            "height": int(height) if height else None,
+                            "video_source": video_source,
+                            "video_start_timestamp": start_timestamp,
+                            "video_end_timestamp": end_timestamp,
+                            "video_fps": float(fps) if fps else None,
+                            "start_time": start_timestamp,
+                            "end_time": end_timestamp,
                         }
 
                         scenes.append(scene_entry)

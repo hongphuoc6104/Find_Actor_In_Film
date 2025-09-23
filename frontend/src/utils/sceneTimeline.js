@@ -67,44 +67,61 @@ export const collectBoxesFromTimelineEntry = (entry) => {
   return boxes.map(toBox).filter(Boolean)
 }
 
-const computeStartTimes = (timeline, fps, epsilon) =>
+const computeStartTimes = (timeline, options) =>
   timeline.map((entry, index) => {
     if (!entry || typeof entry !== 'object') {
-      return index * epsilon
+      return index * options.epsilon
     }
-    const candidates = [
+    const absoluteCandidates = [
+
+      entry.time,
+      entry.start,
+      entry.start_time,
+    ]
+    for (const candidate of absoluteCandidates) {
+      const value = numberOrNull(candidate)
+      if (value !== null) {
+        const adjusted =
+          options.baseTimestamp !== null ? value - options.baseTimestamp : value
+        return Math.max(adjusted, 0)
+      }
+    }
+    const relativeCandidates = [
       entry.clip_offset,
       entry.clipOffset,
       entry.offset,
       entry.relative_time,
       entry.relativeTime,
       entry.timestamp,
+      entry.relative_offset,
+      entry.relativeOffset,
     ]
-    for (const candidate of candidates) {
+    for (const candidate of relativeCandidates) {
       const value = numberOrNull(candidate)
       if (value !== null) {
-        return value
+        return Math.max(value, 0)
       }
     }
-    return fps ? index / fps : index * epsilon
+    return options.fps ? index / options.fps : index * options.epsilon
   })
 
-const computeEndTime = (entry, index, starts, fps, epsilon) => {
+const computeEndTime = (entry, index, starts, options) => {
   if (!entry || typeof entry !== 'object') {
-    return starts[index] + (fps ? 1 / fps : epsilon)
+    return starts[index] + (options.fps ? 1 / options.fps : options.epsilon)
   }
-  const endCandidates = [
-    entry.clip_end,
-    entry.clipEnd,
-    entry.end_offset,
-    entry.endOffset,
+  const absoluteEndCandidates = [
+    entry.end,
+    entry.until,
     entry.end_timestamp,
     entry.endTimestamp,
+    entry.stop,
   ]
-  for (const candidate of endCandidates) {
+  for (const candidate of absoluteEndCandidates) {
     const value = numberOrNull(candidate)
     if (value !== null) {
-      return value
+      const adjusted =
+        options.baseTimestamp !== null ? value - options.baseTimestamp : value
+      return Math.max(adjusted, 0)
     }
   }
   const duration = numberOrNull(entry.duration)
@@ -117,30 +134,64 @@ const computeEndTime = (entry, index, starts, fps, epsilon) => {
       return nextStart
     }
   }
-  return starts[index] + (fps ? 1 / fps : epsilon)
+  return starts[index] + (options.fps ? 1 / options.fps : options.epsilon)
 }
 
 export const pickActiveTimelineEntry = (timeline, currentTime, clipFps) => {
   if (!Array.isArray(timeline) || !timeline.length) {
     return null
   }
-  const fps = Number(clipFps)
-  const hasFps = Number.isFinite(fps) && fps > 0
-  const epsilon = hasFps ? 1 / fps : DEFAULT_TIME_EPSILON
-  const starts = computeStartTimes(timeline, hasFps ? fps : null, epsilon)
+  const options = {
+    fps: null,
+    epsilon: DEFAULT_TIME_EPSILON,
+    baseTimestamp: null,
+  }
+
+  if (clipFps && typeof clipFps === 'object') {
+    const fpsValue = numberOrNull(
+      clipFps.fps ?? clipFps.clipFps ?? clipFps.frameRate ?? clipFps.videoFps,
+    )
+    if (fpsValue !== null && fpsValue > 0) {
+      options.fps = fpsValue
+      options.epsilon = 1 / fpsValue
+    }
+    const baseValue = numberOrNull(
+      clipFps.sceneStart ??
+        clipFps.baseTimestamp ??
+        clipFps.start ??
+        clipFps.startTime ??
+        clipFps.offset ??
+        clipFps.origin,
+    )
+    if (baseValue !== null) {
+      options.baseTimestamp = baseValue
+    }
+  } else {
+    const fpsValue = numberOrNull(clipFps)
+    if (fpsValue !== null && fpsValue > 0) {
+      options.fps = fpsValue
+      options.epsilon = 1 / fpsValue
+    }
+  }
+
+  const starts = computeStartTimes(timeline, options)
+  const epsilon = options.epsilon
   const safeTime = numberOrNull(currentTime) ?? 0
+  const relativeTime =
+    options.baseTimestamp !== null ? safeTime - options.baseTimestamp : safeTime
+  const safeRelative = Number.isFinite(relativeTime) ? relativeTime : 0
 
   let fallback = timeline[0]
   for (let index = 0; index < timeline.length; index += 1) {
     const entry = timeline[index]
     const start = starts[index]
-    const end = computeEndTime(entry, index, starts, hasFps ? fps : null, epsilon)
+    const end = computeEndTime(entry, index, starts, options)
 
-    if (safeTime + epsilon >= start) {
+    if (safeRelative + epsilon >= start) {
       fallback = entry
     }
 
-    if (safeTime >= start - epsilon && safeTime <= end + epsilon) {
+    if (safeRelative >= start - epsilon && safeRelative <= end + epsilon) {
       return entry
     }
   }
@@ -173,7 +224,16 @@ export const computeOverlayBoxes = (
 ) => {
   const timeline = Array.isArray(scene?.timeline) ? scene.timeline : []
   const fps = Number(scene?.clip_fps)
-  const activeEntry = pickActiveTimelineEntry(timeline, currentTime, fps)
+  const sceneStart = numberOrNull(
+    scene?.start_time ??
+      scene?.video_start_timestamp ??
+      scene?.clip_start_timestamp ??
+      scene?.timestamp,
+  )
+  const activeEntry = pickActiveTimelineEntry(timeline, currentTime, {
+    fps,
+    sceneStart,
+  })
   const boxes = activeEntry
     ? collectBoxesFromTimelineEntry(activeEntry)
     : collectBoxesFromScene(scene)
