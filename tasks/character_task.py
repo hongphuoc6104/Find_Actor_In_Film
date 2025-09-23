@@ -416,6 +416,8 @@ def _select_clip_frames(
     return frame_records[window_start : window_end + 1]
 
 
+import subprocess
+
 def _export_track_clip(
     frame_records: List[Dict[str, Any]],
     clips_root: str | None,
@@ -424,7 +426,7 @@ def _export_track_clip(
     track_id: Any,
     clip_fps: float | None,
 ) -> Dict[str, Any]:
-    """Persist a short MP4 clip for the provided frames."""
+    """Persist a short MP4 clip for the provided frames using ffmpeg (libx264)."""
     if not clips_root or not frame_records:
         return {
             "clip_path": None,
@@ -434,6 +436,7 @@ def _export_track_clip(
             "duration": None,
             "timeline_indices": [],
         }
+
     clips_root_abs = os.path.abspath(clips_root)
     os.makedirs(clips_root_abs, exist_ok=True)
 
@@ -448,77 +451,80 @@ def _export_track_clip(
     output_path = os.path.join(clip_dir, filename)
 
     fps_value = clip_fps if clip_fps and clip_fps > 0 else DEFAULT_CLIP_FPS
-
-    codec_candidates = [ "mp4v", "avc1", "H264"]
-    writer = None
-    width = None
-    height = None
-    used_indices: List[int] = []
-    clip_start_frame_index = None
-    clip_end_frame_index = None
-    clip_start_timeline_index = None
-    clip_end_timeline_index = None
     selected_records = _select_clip_frames(frame_records, fps_value)
 
-    def _remove_existing_output() -> None:
-        if os.path.exists(output_path):
-            try:
-                os.remove(output_path)
-            except OSError:
-                pass
+    # Lấy width/height từ frame đầu tiên
+    width, height = None, None
+    for rec in selected_records:
+        frame = cv2.imread(rec["frame_path"])
+        if frame is not None:
+            height, width = frame.shape[:2]
+            break
+    if width is None or height is None:
+        return {
+            "clip_path": None,
+            "width": None,
+            "height": None,
+            "fps": None,
+            "duration": None,
+            "timeline_indices": [],
+        }
+
+    # Xóa file cũ nếu tồn tại
+    if os.path.exists(output_path):
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
+
+    # Chuẩn bị ffmpeg CLI
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-s", f"{width}x{height}",
+        "-r", str(fps_value),
+        "-i", "-",  # stdin
+        "-an",
+        "-vcodec", "libx264",
+        "-pix_fmt", "yuv420p",
+        output_path,
+    ]
+    process = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+
+    used_indices: List[int] = []
+    clip_start_frame_index = clip_end_frame_index = None
+    clip_start_timeline_index = clip_end_timeline_index = None
 
     try:
-        for record in selected_records:
-            entry_index = record.get("timeline_index")
-            frame_path = record.get("frame_path")
-            if not frame_path:
-                continue
-            frame = cv2.imread(frame_path)
+        for rec in selected_records:
+            frame = cv2.imread(rec["frame_path"])
             if frame is None:
                 continue
+            if frame.shape[:2] != (height, width):
+                frame = cv2.resize(frame, (width, height))
+            process.stdin.write(frame.tobytes())
 
-            if width is None or height is None:
-                height, width = frame.shape[:2]
-            if writer is None:
-                if width is None or height is None:
-                    continue
-                for codec in codec_candidates:
-                    _remove_existing_output()
-                    fourcc = cv2.VideoWriter_fourcc(*codec)
-                    temp_writer = cv2.VideoWriter(
-                        output_path, fourcc, fps_value, (int(width), int(height))
-                    )
-                    if temp_writer.isOpened():
-                        writer = temp_writer
-                        break
-                    temp_writer.release()
-                if writer is None:
-                    break
-            elif writer is not None:
-                if frame.shape[1] != width or frame.shape[0] != height:
-                    frame = cv2.resize(frame, (int(width), int(height)))
-            else:
-                break
-
-            if writer is None:
-                break
-
-            writer.write(frame)
+            # Ghi lại timeline index
+            entry_index = rec.get("timeline_index")
             if entry_index is not None:
                 used_indices.append(int(entry_index))
                 if clip_start_timeline_index is None:
                     clip_start_timeline_index = int(entry_index)
                 clip_end_timeline_index = int(entry_index)
-            frame_idx_val = record.get("frame_index")
+
+            # Ghi lại frame index
+            frame_idx_val = rec.get("frame_index")
             if frame_idx_val is not None:
                 if clip_start_frame_index is None:
                     clip_start_frame_index = int(frame_idx_val)
                 clip_end_frame_index = int(frame_idx_val)
     finally:
-        if writer is not None:
-            writer.release()
+        process.stdin.close()
+        process.wait()
 
-    if not used_indices or width is None or height is None:
+    if not used_indices:
         if os.path.exists(output_path):
             try:
                 os.remove(output_path)
@@ -532,6 +538,7 @@ def _export_track_clip(
             "duration": None,
             "timeline_indices": [],
         }
+
     rel_path = os.path.relpath(output_path, clips_root_abs)
     duration = len(used_indices) / float(fps_value)
     return {
@@ -546,6 +553,7 @@ def _export_track_clip(
         "clip_start_frame_index": clip_start_frame_index,
         "clip_end_frame_index": clip_end_frame_index,
     }
+
 
 @task(name="Build Character Profiles Task")
 def character_task():
