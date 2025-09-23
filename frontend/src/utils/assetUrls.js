@@ -14,7 +14,21 @@ export const computeApiAssetBase = (base = API_BASE_URL) => {
     return ''
   }
 
-  let normalised = stripTrailingSlashes(trimmed)
+  let resolved = trimmed
+
+  if (!ABSOLUTE_URL_PATTERN.test(trimmed) && !trimmed.startsWith('//')) {
+    const origin =
+      typeof window !== 'undefined' && window?.location?.origin
+        ? stripTrailingSlashes(window.location.origin)
+        : ''
+
+    if (origin) {
+      const relativePath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+      resolved = `${origin}${relativePath}`
+    }
+  }
+
+  let normalised = stripTrailingSlashes(resolved)
   if (normalised.toLowerCase().endsWith('/api')) {
     normalised = normalised.slice(0, -4)
   }
@@ -23,9 +37,8 @@ export const computeApiAssetBase = (base = API_BASE_URL) => {
   return normalised || ''
 }
 
-const DEFAULT_ASSET_BASE = computeApiAssetBase()
+export const toAbsoluteAssetUrl = (value, base) => {
 
-export const toAbsoluteAssetUrl = (value, base = DEFAULT_ASSET_BASE) => {
   if (typeof value !== 'string') {
     return value ?? ''
   }
@@ -39,7 +52,10 @@ export const toAbsoluteAssetUrl = (value, base = DEFAULT_ASSET_BASE) => {
     return trimmed
   }
 
-  const resolvedBase = computeApiAssetBase(base || DEFAULT_ASSET_BASE)
+  const resolvedBase =
+    typeof base === 'string' && base.trim()
+      ? computeApiAssetBase(base)
+      : computeApiAssetBase()
   if (!resolvedBase) {
     return trimmed
   }

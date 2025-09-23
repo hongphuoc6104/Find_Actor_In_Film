@@ -144,6 +144,35 @@ assert.equal(
   'Leading slashes should be handled when resolving asset URLs',
 )
 
+const previousWindow = globalThis.window
+globalThis.window = { location: { origin: 'https://frontend.example.com' } }
+
+try {
+  const relativeBase = assetUrlTest.computeApiAssetBase('/api')
+  assert.equal(
+    relativeBase,
+    'https://frontend.example.com',
+    'Relative API bases should resolve against the current origin',
+  )
+
+  const relativeClip = toAbsoluteAssetUrl('/clips/example.mp4', '/api')
+  assert.equal(
+    relativeClip,
+    'https://frontend.example.com/clips/example.mp4',
+    'Clip URLs should resolve against the origin when API base is relative',
+  )
+
+  const relativeFrame = toAbsoluteAssetUrl('frames/example.jpg', '/api/')
+  assert.equal(
+    relativeFrame,
+    'https://frontend.example.com/frames/example.jpg',
+    'Frame URLs should resolve against the origin when API base is relative',
+  )
+} finally {
+  globalThis.window = previousWindow
+}
+
+
 const normalisedMetadata = ensureFrameMetadata({
   frame: '/frames/example.jpg',
   preview_image: 'previews/example.jpg',
