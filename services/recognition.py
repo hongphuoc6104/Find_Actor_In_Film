@@ -33,16 +33,29 @@ def _normalize_scene(scene: Any) -> Dict[str, Any] | None:
         return None
     if isinstance(scene, dict):
         scene_copy = dict(scene)
+
+        # --- Copy timeline ---
         timeline = scene_copy.get("timeline")
         if isinstance(timeline, list):
             scene_copy["timeline"] = [
                 dict(entry) if isinstance(entry, dict) else entry
                 for entry in timeline
             ]
+
+        # --- Copy highlights ---
+        highlights = scene_copy.get("highlights")
+        if isinstance(highlights, list):
+            scene_copy["highlights"] = [
+                dict(entry) if isinstance(entry, dict) else entry
+                for entry in highlights
+            ]
+
         return scene_copy
+
     if isinstance(scene, str):
         return {"frame": scene}
     return None
+
 
 
 PRESENT_LABEL_VI = "Xuất hiện trong phim"

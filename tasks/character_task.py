@@ -774,6 +774,29 @@ def character_task():
                         if not timeline_entries:
                             continue
 
+                        def _build_highlights(entries, det_th=0.8, max_gap=2.0):
+                            highlights = []
+                            current = None
+                            for e in entries:
+                                ts = _parse_time(e.get("timestamp"))
+                                score = e.get("det_score", 0.0) or 0.0
+                                if ts is None or score < det_th:
+                                    continue
+                                if current is None:
+                                    current = {"start": ts, "end": ts, "max_score": score}
+                                else:
+                                    if ts - current["end"] <= max_gap:
+                                        current["end"] = ts
+                                        current["max_score"] = max(current["max_score"], score)
+                                    else:
+                                        highlights.append(current)
+                                        current = {"start": ts, "end": ts, "max_score": score}
+                            if current:
+                                highlights.append(current)
+                            return highlights
+
+                        highlights = _build_highlights(timeline_entries)
+
                         clip_fps_value = float(fps) if fps else DEFAULT_CLIP_FPS
                         timeline_to_store = timeline_entries
 
@@ -911,7 +934,7 @@ def character_task():
                             "start_time": start_timestamp,
                             "end_time": end_timestamp,
                         }
-
+                        scene_entry["highlights"] = highlights
                         scenes.append(scene_entry)
 
                     rep_idx = (

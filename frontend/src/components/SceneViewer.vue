@@ -174,29 +174,56 @@ function mergeTimelineEntries(entries, maxGap = 1.0) {
   return merged
 }
 
+
 const timelineSegments = computed(() => {
-  if (!props.scene || !Array.isArray(props.scene.timeline)) return []
-  // lọc timeline chỉ giữ det_score >= 0.9
-  const raw = props.scene.timeline
-    .filter(e => e && typeof e === 'object' && (e.det_score ?? 0) >= 0.9)
-  const merged = mergeTimelineEntries(raw, 1.0)
-  return merged.map((seg, i) => {
-    const format = (ts) => {
-      if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
-      const m = Math.floor(ts / 60), s = Math.floor(ts % 60)
-      return `${m}:${s.toString().padStart(2, '0')}`
-    }
-    return {
-      id: i,
-      order: i + 1,
-      label: `Khoảng #${i + 1}`,
-      range: `${format(seg.start)} → ${format(seg.end)}`,
-      start: seg.start,
-      end: seg.end,
-      active: videoTime.value >= seg.start && videoTime.value <= seg.end,
-    }
-  })
+  if (!props.scene) return []
+
+  // Nếu API đã trả về highlights thì dùng luôn
+  if (Array.isArray(props.scene.highlights) && props.scene.highlights.length) {
+    return props.scene.highlights.map((h, i) => {
+      const format = (ts) => {
+        if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
+        const m = Math.floor(ts / 60), s = Math.floor(ts % 60)
+        return `${m}:${s.toString().padStart(2, '0')}`
+      }
+      return {
+        id: i,
+        order: i + 1,
+        label: `Đoạn highlight #${i + 1}`,
+        range: `${format(h.start)} → ${format(h.end)}`,
+        start: h.start,
+        end: h.end,
+        active: videoTime.value >= h.start && videoTime.value <= h.end,
+      }
+    })
+  }
+
+  // Fallback: nếu chưa có highlights thì gộp từ timeline như trước
+  if (Array.isArray(props.scene.timeline)) {
+    const raw = props.scene.timeline
+      .filter(e => e && typeof e === 'object' && (e.det_score ?? 0) >= 0.9)
+    const merged = mergeTimelineEntries(raw, 1.0)
+    return merged.map((seg, i) => {
+      const format = (ts) => {
+        if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
+        const m = Math.floor(ts / 60), s = Math.floor(ts % 60)
+        return `${m}:${s.toString().padStart(2, '0')}`
+      }
+      return {
+        id: i,
+        order: i + 1,
+        label: `Khoảng #${i + 1}`,
+        range: `${format(seg.start)} → ${format(seg.end)}`,
+        start: seg.start,
+        end: seg.end,
+        active: videoTime.value >= seg.start && videoTime.value <= seg.end,
+      }
+    })
+  }
+
+  return []
 })
+
 
 const seekToSegment = (segment) => {
   if (videoRef.value) {

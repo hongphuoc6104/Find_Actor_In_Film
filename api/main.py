@@ -391,6 +391,7 @@ def _convert_scene_entry(
             return None
         return float(result)
 
+    # --- Video source / URL ---
     video_source = None
     for key in (
         "video_source",
@@ -414,6 +415,7 @@ def _convert_scene_entry(
     else:
         video_url = converted.get("video_url")
 
+    # --- Start / end / duration ---
     start_time = None
     end_time = None
     duration = None
@@ -466,7 +468,7 @@ def _convert_scene_entry(
     if duration is not None:
         converted["duration"] = duration
 
-
+    # --- Clip URL ---
     clip_source = converted.get("clip_path") or converted.get("clip")
     if isinstance(clip_source, str) and clip_source:
         clip_url = _build_clip_url(clip_source)
@@ -475,6 +477,8 @@ def _convert_scene_entry(
         converted["clip_url"] = clip_url
     else:
         clip_url = converted.get("clip_url")
+
+    # --- Timeline ---
     timeline = converted.get("timeline")
     if isinstance(timeline, list):
         converted["timeline"] = []
@@ -494,8 +498,27 @@ def _convert_scene_entry(
             else:
                 converted["timeline"].append(item)
 
-    return converted
+    # --- Highlights ---
+    highlights = converted.get("highlights")
+    if isinstance(highlights, list):
+        normalized = []
+        for h in highlights:
+            if not isinstance(h, dict):
+                continue
+            start = _parse_float(h.get("start"))
+            end = _parse_float(h.get("end"))
+            if start is None or end is None:
+                continue
+            entry = {
+                "start": start,
+                "end": end,
+                "duration": round(end - start, 3) if end >= start else None,
+                "max_score": _parse_float(h.get("max_score")) or 0.0,
+            }
+            normalized.append(entry)
+        converted["highlights"] = normalized
 
+    return converted
 
 def _convert_preview_entry(
     entry: Dict[str, Any],

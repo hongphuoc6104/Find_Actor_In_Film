@@ -141,6 +141,12 @@ const ensureFrameMetadata = (entry) => {
     )
   }
 
+  if (Array.isArray(entry.highlights)) {
+  copy.highlights = entry.highlights.map((h) =>
+    h && typeof h === 'object' ? { ...h } : h
+  )
+}
+
   const frameSources = [
     entry.frame_url,
     entry.frame,
