@@ -472,13 +472,13 @@ onBeforeUnmount(() => {
   --surface-radius: 0.75rem;
   --surface-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
   display: grid;
-  gap: 2rem;
+  gap: clamp(1.5rem, 3vw, 2.5rem);
 }
 
 .face-search__layout {
   display: grid;
-  grid-template-columns: minmax(260px, 320px) 1fr;
-  gap: 2rem;
+  grid-template-columns: minmax(260px, clamp(320px, 30vw, 420px)) minmax(0, 1fr);
+  gap: clamp(1.5rem, 3vw, 2.75rem);
   align-items: start;
 }
 
@@ -632,13 +632,13 @@ button.secondary {
 
 .face-search__workspace {
   display: grid;
-  gap: 1.5rem;
+  gap: clamp(1.25rem, 2.5vw, 1.75rem);
 }
 
 .face-search__results {
   display: grid;
-  grid-template-columns: minmax(230px, 280px) 1fr;
-  gap: 1.5rem;
+  grid-template-columns: minmax(240px, clamp(300px, 28vw, 380px)) minmax(0, 1fr);
+  gap: clamp(1.25rem, 2.5vw, 2rem);
   align-items: start;
 }
 
@@ -956,7 +956,8 @@ face-search__actions {
 
 @media (max-width: 1024px) {
   .face-search__layout {
-    grid-template-columns: minmax(240px, 1fr) 1.5fr;
+    grid-template-columns: minmax(240px, clamp(280px, 40vw, 340px)) minmax(0, 1fr);
+    gap: clamp(1.25rem, 3vw, 2rem);
   }
 }
 

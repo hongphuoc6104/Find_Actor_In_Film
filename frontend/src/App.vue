@@ -150,7 +150,7 @@ const activeComponent = computed(() => ROUTES[currentPath.value] ?? ROUTES[DEFAU
 .app-shell__main {
   flex: 1;
   padding: 2.5rem 1.5rem 3rem;
-  max-width: 1100px;
+  max-width: min(1400px, 100%);
   margin: 0 auto;
   width: 100%;
   display: block;
