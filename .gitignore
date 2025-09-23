@@ -39,3 +39,4 @@ debug/
 # System files
 .DS_Store
 Thumbs.db
+warehouse/
