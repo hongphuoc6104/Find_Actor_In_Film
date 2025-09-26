@@ -180,23 +180,24 @@ const timelineSegments = computed(() => {
 
   // Nếu API đã trả về highlights thì dùng luôn
   if (Array.isArray(props.scene.highlights) && props.scene.highlights.length) {
-    return props.scene.highlights.map((h, i) => {
-      const format = (ts) => {
-        if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
-        const m = Math.floor(ts / 60), s = Math.floor(ts % 60)
-        return `${m}:${s.toString().padStart(2, '0')}`
-      }
-      return {
-        id: i,
-        order: i + 1,
-        label: `Đoạn highlight #${i + 1}`,
-        range: `${format(h.start)} → ${format(h.end)}`,
-        start: h.start,
-        end: h.end,
-        active: videoTime.value >= h.start && videoTime.value <= h.end,
-      }
-    })
-  }
+  return props.scene.highlights.map((h, i) => {
+    const format = (ts) => {
+      if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
+      const m = Math.floor(ts / 60), s = Math.floor(ts % 60)
+      return `${m}:${s.toString().padStart(2, '0')}`
+    }
+    return {
+      id: i,
+      order: i + 1,
+      label: `Cảnh ${i + 1} (score: ${(h.max_score*100).toFixed(0)}%)`,
+      range: `${format(h.start)} → ${format(h.end)} (${h.duration.toFixed(1)}s)`,
+      start: h.start,
+      end: h.end,
+      active: videoTime.value >= h.start && videoTime.value <= h.end,
+    }
+  })
+}
+
 
   // Fallback: nếu chưa có highlights thì gộp từ timeline như trước
   if (Array.isArray(props.scene.timeline)) {

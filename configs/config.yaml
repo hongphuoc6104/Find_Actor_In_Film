@@ -23,7 +23,7 @@ storage:
 embedding:
   model: "buffalo_l"
   l2_normalize: true
-  providers: ["CUDAExecutionProvider"]
+  providers: ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 pca:
   enable: true

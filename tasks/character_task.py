@@ -26,6 +26,13 @@ PRE_CLIP_BUFFER_SECONDS = 1.0
 POST_CLIP_BUFFER_SECONDS = 1.0
 DEFAULT_FRAME_EXTENSIONS = [".jpg", ".jpeg", ".png"]
 
+HIGHLIGHT_MIN_DURATION = 4.0   # tối thiểu 4s
+HIGHLIGHT_MAX_DURATION = 60.0  # tối đa 60s
+HIGHLIGHT_EXTEND_SECONDS = 2.0 # mở rộng thêm 2s trước sau
+HIGHLIGHT_MIN_CONFIDENCE = 0.85
+HIGHLIGHT_MAX_GAP_SECONDS = 2.0
+
+
 def _frame_to_int(frame_name: Any) -> int:
     base = os.path.splitext(str(frame_name))[0]
     digits = "".join(ch for ch in base if ch.isdigit())
@@ -774,26 +781,71 @@ def character_task():
                         if not timeline_entries:
                             continue
 
-                        def _build_highlights(entries, det_th=0.8, max_gap=2.0):
-                            highlights = []
-                            current = None
+                        def _build_highlights(
+                                entries,
+                                det_th=HIGHLIGHT_MIN_CONFIDENCE,
+                                max_gap=HIGHLIGHT_MAX_GAP_SECONDS,
+                                extend_window=HIGHLIGHT_EXTEND_SECONDS,
+                                min_duration=HIGHLIGHT_MIN_DURATION,
+                                max_duration=HIGHLIGHT_MAX_DURATION,
+                        ):
+                            """Sinh highlight segment từ timeline detection, chỉ trả về thời gian để tua video gốc."""
+
+                            detected: List[Tuple[float, float]] = []
                             for e in entries:
                                 ts = _parse_time(e.get("timestamp"))
                                 score = e.get("det_score", 0.0) or 0.0
                                 if ts is None or score < det_th:
                                     continue
+                                detected.append((ts, score))
+
+                            if not detected:
+                                return []
+
+                            detected.sort(key=lambda item: item[0])
+
+                            raw_segments: List[Dict[str, float]] = []
+                            current: Dict[str, float] | None = None
+                            for ts, score in detected:
                                 if current is None:
                                     current = {"start": ts, "end": ts, "max_score": score}
+                                elif ts - current["end"] <= max_gap:
+                                    current["end"] = ts
+                                    current["max_score"] = max(current["max_score"], score)
                                 else:
-                                    if ts - current["end"] <= max_gap:
-                                        current["end"] = ts
-                                        current["max_score"] = max(current["max_score"], score)
-                                    else:
-                                        highlights.append(current)
-                                        current = {"start": ts, "end": ts, "max_score": score}
+                                    raw_segments.append(current)
+                                    current = {"start": ts, "end": ts, "max_score": score}
                             if current:
-                                highlights.append(current)
-                            return highlights
+                                raw_segments.append(current)
+
+                            processed: List[Dict[str, float]] = []
+                            for seg in raw_segments:
+                                seg_start, seg_end = seg["start"], seg["end"]
+                                duration = seg_end - seg_start
+                                if duration <= 0:
+                                    continue
+
+                                # Mở rộng thêm ngữ cảnh
+                                seg_start = max(seg_start - extend_window, 0.0)
+                                seg_end = seg_end + extend_window
+                                duration = seg_end - seg_start
+
+                                # Bắt buộc min/max
+                                if duration < min_duration:
+                                    seg_end = seg_start + min_duration
+                                    duration = min_duration
+                                if duration > max_duration:
+                                    seg_end = seg_start + max_duration
+                                    duration = max_duration
+
+                                processed.append({
+                                    "start": round(seg_start, 3),
+                                    "end": round(seg_end, 3),
+                                    "duration": round(duration, 3),
+                                    "max_score": round(seg["max_score"], 3),
+                                })
+
+                            return processed
 
                         highlights = _build_highlights(timeline_entries)
 
