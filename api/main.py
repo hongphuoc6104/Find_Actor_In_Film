@@ -515,8 +515,124 @@ def _convert_scene_entry(
                 "duration": round(end - start, 3) if end >= start else None,
                 "max_score": _parse_float(h.get("max_score")) or 0.0,
             }
+            max_det_score = _parse_float(h.get("max_det_score"))
+            if max_det_score is not None:
+                entry["max_det_score"] = max_det_score
+                entry.setdefault("max_score", max_det_score)
+            min_det_score = _parse_float(h.get("min_det_score"))
+            if min_det_score is not None:
+                entry["min_det_score"] = min_det_score
+
+            for key in ("avg_similarity", "max_similarity", "min_similarity"):
+                value = _parse_float(h.get(key))
+                if value is not None:
+                    entry[key] = value
+
+            match_count = h.get("match_count")
+            if isinstance(match_count, (int, float)):
+                entry["match_count"] = int(match_count)
+
+            clusters = h.get("matched_cluster_ids")
+            if isinstance(clusters, list):
+                entry["matched_cluster_ids"] = [
+                    str(c)
+                    for c in clusters
+                    if c is not None and str(c)
+                ]
+
+            final_ids = h.get("matched_final_character_ids")
+            if isinstance(final_ids, list):
+                entry["matched_final_character_ids"] = [
+                    str(c)
+                    for c in final_ids
+                    if c is not None and str(c)
+                ]
+
+            detections = h.get("supporting_detections")
+            if isinstance(detections, list):
+                support_entries = []
+                for det in detections:
+                    if not isinstance(det, dict):
+                        continue
+                    det_entry: Dict[str, Any] = {}
+                    timestamp = _parse_float(det.get("timestamp"))
+                    if timestamp is not None:
+                        det_entry["timestamp"] = timestamp
+                    det_score = _parse_float(det.get("det_score"))
+                    if det_score is not None:
+                        det_entry["det_score"] = det_score
+                    actor_similarity = _parse_float(det.get("actor_similarity"))
+                    if actor_similarity is not None:
+                        det_entry["actor_similarity"] = actor_similarity
+                    for key in ("frame", "frame_index", "order", "track_id"):
+                        value = det.get(key)
+                        if value is not None:
+                            det_entry[key] = value
+                    det_clusters = det.get("cluster_ids")
+                    if isinstance(det_clusters, list):
+                        det_entry["cluster_ids"] = [
+                            str(c)
+                            for c in det_clusters
+                            if c is not None and str(c)
+                        ]
+                    det_final_ids = det.get("final_character_ids")
+                    if isinstance(det_final_ids, list):
+                        det_entry["final_character_ids"] = [
+                            str(c)
+                            for c in det_final_ids
+                            if c is not None and str(c)
+                        ]
+                    for identity_key in (
+                        "character_id",
+                        "final_character_id",
+                        "scene_final_character_id",
+                    ):
+                        value = det.get(identity_key)
+                        if value is not None:
+                            det_entry[identity_key] = str(value)
+                    if det_entry:
+                        support_entries.append(det_entry)
+                if support_entries:
+                    entry["supporting_detections"] = support_entries
             normalized.append(entry)
         converted["highlights"] = normalized
+
+    support_meta = converted.get("highlight_support")
+    if isinstance(support_meta, dict):
+        support_copy: Dict[str, Any] = {}
+        for key, value in support_meta.items():
+            if key in {
+                "det_score_threshold",
+                "similarity_threshold",
+                "min_similarity",
+                "max_similarity",
+                "avg_similarity",
+                "min_det_score",
+                "max_det_score",
+            }:
+                parsed = _parse_float(value)
+                if parsed is not None:
+                    support_copy[key] = parsed
+                continue
+            if key in {"highlight_count", "match_count"}:
+                try:
+                    support_copy[key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+                continue
+            if key in {
+                "matched_cluster_ids",
+                "matched_final_character_ids",
+                "allowed_cluster_ids",
+            } and isinstance(value, list):
+                support_copy[key] = [str(v) for v in value if v is not None and str(v)]
+                continue
+            if key == "target_final_character_id" and value is not None:
+                support_copy[key] = str(value)
+                continue
+            support_copy[key] = value
+        converted["highlight_support"] = support_copy
+
 
     return converted
 

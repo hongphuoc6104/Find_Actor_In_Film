@@ -25,23 +25,11 @@
                 @loadedmetadata="onVideoLoadedMetadata"
                 @timeupdate="onVideoTimeUpdate"
               />
-              <div
-                v-for="(box, index) in overlayBoxes"
-                :key="`video-box-${index}`"
-                class="scene-viewer__bbox"
-                :style="box"
-              />
             </div>
 
             <!-- Fallback ảnh -->
             <div v-else-if="sceneImage" class="scene-viewer__frame">
               <img :src="sceneImage" alt="Khung hình đề xuất" @load="onImageLoad" />
-              <div
-                v-for="(box, index) in overlayBoxes"
-                :key="`image-box-${index}`"
-                class="scene-viewer__bbox"
-                :style="box"
-              />
             </div>
 
             <p v-else class="scene-viewer__placeholder">Không có cảnh nào để hiển thị.</p>
@@ -86,7 +74,6 @@
 
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
-import { collectBoxesFromScene, scaleBoxes } from '../utils/sceneTimeline.js'
 import { toAbsoluteAssetUrl } from '../utils/assetUrls.js'
 
 const props = defineProps({
@@ -244,13 +231,6 @@ const onVideoTimeUpdate = (e) => {
   }
 }
 
-/* --- Others --- */
-const rawBoxes = computed(() => collectBoxesFromScene(props.scene))
-const overlayBoxes = computed(() => {
-  const w = videoSize.width || imageSize.width, h = videoSize.height || imageSize.height
-  return (w && h) ? scaleBoxes(rawBoxes.value, w, h) : []
-})
-
 const sceneDetails = computed(() => {
   if (!props.scene) return []
   const details = []
@@ -372,12 +352,6 @@ const sceneIndexLabel = computed(() => {
   background: transparent;
 }
 
-.scene-viewer__bbox {
-  position: absolute;
-  border: 2px solid rgba(14, 165, 233, 0.9);
-  border-radius: 0.35rem;
-  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.3);
-}
 
 .scene-viewer__placeholder {
   margin: 0;

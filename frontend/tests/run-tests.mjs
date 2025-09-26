@@ -2,16 +2,8 @@ import assert from 'node:assert/strict'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
-
+import { pickActiveTimelineEntry } from '../src/utils/sceneTimeline.js'
 import { __test__ } from '../src/composables/useRecognitionStore.js'
-import {
-  collectBoxesFromScene,
-  collectBoxesFromTimelineEntry,
-  computeOverlayBoxes,
-  pickActiveTimelineEntry,
-  scaleBoxes,
-  toBox,
-} from '../src/utils/sceneTimeline.js'
 import { toAbsoluteAssetUrl, __test__ as assetUrlTest } from '../src/utils/assetUrls.js'
 const { normaliseMovies, ensureFrameMetadata } = __test__
 
@@ -72,16 +64,6 @@ assert(
 
 console.log('Frontend snapshot tests passed.')
 
-const simpleBox = toBox([10, 20, 30, 60])
-assert.deepEqual(
-  simpleBox,
-  { x: 10, y: 20, width: 20, height: 40 },
-  'toBox should convert array coordinates to box objects',
-)
-
-const sceneBoxes = collectBoxesFromScene({ bbox: [0, 0, 100, 100], boxes: [[10, 10, 60, 90]] })
-assert.equal(sceneBoxes.length, 2, 'Scene-level boxes should merge bbox and boxes array')
-
 const timeline = [
   { timestamp: 10, clip_offset: 0, duration: 2.5, bbox: [0, 0, 100, 100] },
   { timestamp: 12.5, clip_offset: 2.5, duration: 2.5, bbox: [50, 50, 150, 150] },
@@ -104,28 +86,6 @@ assert.strictEqual(
   legacySelected,
   timeline[0],
   'Legacy selection should still support clip-based offsets',
-)
-
-const timelineBoxes = collectBoxesFromTimelineEntry(selectedLate)
-assert.equal(timelineBoxes.length, 1, 'Timeline entry should expose bbox for overlays')
-const scaled = scaleBoxes(timelineBoxes, 200, 200)
-assert.deepEqual(
-  scaled[0],
-  { left: '25%', top: '25%', width: '50%', height: '50%' },
-  'Scaled boxes should respect relative dimensions',
-)
-
-const overlay = computeOverlayBoxes(
-  { timeline, clip_fps: 2, start_time: 10 },
-  200,
-  200,
-  14.9,
-)
-assert.equal(overlay.length, 1, 'Overlay helper should honour active timeline entries')
-assert.equal(
-  overlay[0].left,
-  '25%',
-  'Overlay helper should convert boxes to CSS percentages',
 )
 
 console.log('Scene timeline utility tests passed.')

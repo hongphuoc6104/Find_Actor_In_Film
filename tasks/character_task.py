@@ -25,12 +25,16 @@ MAX_CLIP_DURATION = 10.0
 PRE_CLIP_BUFFER_SECONDS = 1.0
 POST_CLIP_BUFFER_SECONDS = 1.0
 DEFAULT_FRAME_EXTENSIONS = [".jpg", ".jpeg", ".png"]
+DEFAULT_HIGHLIGHT_DET_SCORE = 0.8
+DEFAULT_HIGHLIGHT_GAP_SECONDS = 2.0
+DEFAULT_HIGHLIGHT_SIMILARITY = 0.35
+MAX_HIGHLIGHT_SAMPLES = 10
 
-HIGHLIGHT_MIN_DURATION = 4.0   # tối thiểu 4s
-HIGHLIGHT_MAX_DURATION = 60.0  # tối đa 60s
-HIGHLIGHT_EXTEND_SECONDS = 2.0 # mở rộng thêm 2s trước sau
-HIGHLIGHT_MIN_CONFIDENCE = 0.85
-HIGHLIGHT_MAX_GAP_SECONDS = 2.0
+# HIGHLIGHT_MIN_DURATION = 4.0   # tối thiểu 4s
+# HIGHLIGHT_MAX_DURATION = 60.0  # tối đa 60s
+# HIGHLIGHT_EXTEND_SECONDS = 2.0 # mở rộng thêm 2s trước sau
+# HIGHLIGHT_MIN_CONFIDENCE = 0.85
+# HIGHLIGHT_MAX_GAP_SECONDS = 2.0
 
 
 def _frame_to_int(frame_name: Any) -> int:
@@ -94,6 +98,288 @@ def _safe_slug(value: Any, fallback: str = "scene") -> str:
     sanitized = "".join(ch.lower() if ch.isalnum() else "_" for ch in text)
     sanitized = sanitized.strip("_") or fallback
     return sanitized[:80]
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(result):
+        return None
+    return float(result)
+
+
+def _coerce_str_set(value: Any) -> set[str]:
+    result: set[str] = set()
+    if value is None:
+        return result
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            if item is None or item != item:
+                continue
+            try:
+                result.add(str(item))
+            except Exception:
+                continue
+        return result
+    if value != value:
+        return result
+    try:
+        result.add(str(value))
+    except Exception:
+        return set()
+    return result
+
+
+def _summarise_detection(
+    entry: Dict[str, Any],
+    timestamp: float,
+    det_score: float,
+    similarity: float | None,
+    clusters: set[str],
+    final_ids: set[str],
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "timestamp": timestamp,
+        "det_score": det_score,
+    }
+    for key in ("frame", "frame_index", "order", "track_id"):
+        value = entry.get(key)
+        if value is None or value != value:
+            continue
+        summary[key] = value
+    if similarity is not None:
+        summary["actor_similarity"] = similarity
+    if clusters:
+        summary["cluster_ids"] = sorted(clusters)
+    if final_ids:
+        summary["final_character_ids"] = sorted(final_ids)
+    for identity_key in ("character_id", "final_character_id", "scene_final_character_id"):
+        value = entry.get(identity_key)
+        if value is None or value != value:
+            continue
+        summary[identity_key] = str(value)
+    return summary
+
+
+def _finalise_highlight(accumulator: Dict[str, Any]) -> Dict[str, Any]:
+    result = {
+        "start": accumulator["start"],
+        "end": accumulator["end"],
+        "max_score": accumulator["max_det_score"],
+        "max_det_score": accumulator["max_det_score"],
+        "min_det_score": accumulator["min_det_score"],
+        "matched_cluster_ids": sorted(accumulator["matched_cluster_ids"]),
+        "matched_final_character_ids": sorted(
+            accumulator["matched_final_character_ids"]
+        ),
+        "supporting_detections": accumulator["supporting_detections"],
+        "match_count": int(accumulator["match_count"]),
+    }
+
+    if accumulator["similarity_count"] > 0:
+        avg_sim = accumulator["similarity_sum"] / accumulator["similarity_count"]
+        result["avg_similarity"] = round(avg_sim, 6)
+        result["max_similarity"] = accumulator["max_similarity"]
+        result["min_similarity"] = accumulator["min_similarity"]
+    duration = accumulator["end"] - accumulator["start"]
+    if duration >= 0:
+        result["duration"] = round(duration, 3)
+    return result
+
+
+def _make_highlight_matcher(
+    final_character_id: Any,
+    allowed_clusters: set[str] | None,
+    similarity_threshold: float | None,
+) -> Any:
+    allowed_final_ids: set[str] = set()
+    if final_character_id is not None:
+        try:
+            allowed_final_ids.add(str(final_character_id))
+        except Exception:
+            pass
+    allowed_clusters = {str(c) for c in (allowed_clusters or set()) if c is not None}
+
+    def _matcher(entry: Dict[str, Any]) -> bool:
+        clusters = _coerce_str_set(entry.get("cluster_id"))
+        clusters.update(_coerce_str_set(entry.get("cluster_ids")))
+        final_ids = _coerce_str_set(entry.get("final_character_id"))
+        final_ids.update(_coerce_str_set(entry.get("final_character_ids")))
+
+        similarity: float | None = None
+        for key in ("actor_similarity", "similarity", "character_similarity"):
+            similarity = _to_float(entry.get(key))
+            if similarity is not None:
+                break
+
+        has_final_match = bool(allowed_final_ids and final_ids & allowed_final_ids)
+        has_cluster_match = bool(allowed_clusters and clusters & allowed_clusters)
+        has_similarity_match = (
+            similarity_threshold is not None
+            and similarity is not None
+            and similarity >= similarity_threshold
+        )
+
+        return has_final_match or has_cluster_match or has_similarity_match
+
+    return _matcher
+
+
+def _build_highlights(
+    entries: List[Dict[str, Any]],
+    *,
+    det_th: float = DEFAULT_HIGHLIGHT_DET_SCORE,
+    max_gap: float = DEFAULT_HIGHLIGHT_GAP_SECONDS,
+    match_fn: Any | None = None,
+) -> List[Dict[str, Any]]:
+    highlights: List[Dict[str, Any]] = []
+    current: Dict[str, Any] | None = None
+
+    for entry in entries:
+        timestamp = _parse_time(entry.get("timestamp"))
+        if timestamp is None:
+            continue
+
+        det_score = _to_float(entry.get("det_score"))
+        if det_score is None or det_score < det_th:
+            continue
+
+        if match_fn is not None and not match_fn(entry):
+            continue
+
+        similarity: float | None = None
+        for key in ("actor_similarity", "similarity", "character_similarity"):
+            similarity = _to_float(entry.get(key))
+            if similarity is not None:
+                break
+
+        clusters = _coerce_str_set(entry.get("cluster_id"))
+        clusters.update(_coerce_str_set(entry.get("cluster_ids")))
+        final_ids = _coerce_str_set(entry.get("final_character_id"))
+        final_ids.update(_coerce_str_set(entry.get("final_character_ids")))
+
+        detection_summary = _summarise_detection(
+            entry,
+            timestamp,
+            det_score,
+            similarity,
+            clusters,
+            final_ids,
+        )
+
+        if current is None:
+            current = {
+                "start": timestamp,
+                "end": timestamp,
+                "max_det_score": det_score,
+                "min_det_score": det_score,
+                "max_similarity": similarity if similarity is not None else None,
+                "min_similarity": similarity if similarity is not None else None,
+                "similarity_sum": similarity if similarity is not None else 0.0,
+                "similarity_count": 1 if similarity is not None else 0,
+                "matched_cluster_ids": set(clusters),
+                "matched_final_character_ids": set(final_ids),
+                "supporting_detections": [detection_summary],
+                "match_count": 1,
+            }
+            continue
+
+        gap = timestamp - current["end"]
+        if gap <= max_gap:
+            current["end"] = timestamp
+            current["max_det_score"] = max(current["max_det_score"], det_score)
+            current["min_det_score"] = min(current["min_det_score"], det_score)
+            current["match_count"] += 1
+            if similarity is not None:
+                if current["max_similarity"] is None or similarity > current["max_similarity"]:
+                    current["max_similarity"] = similarity
+                if current["min_similarity"] is None or similarity < current["min_similarity"]:
+                    current["min_similarity"] = similarity
+                current["similarity_sum"] += similarity
+                current["similarity_count"] += 1
+            current["matched_cluster_ids"].update(clusters)
+            current["matched_final_character_ids"].update(final_ids)
+            if len(current["supporting_detections"]) < MAX_HIGHLIGHT_SAMPLES:
+                current["supporting_detections"].append(detection_summary)
+            continue
+
+        highlights.append(_finalise_highlight(current))
+        current = {
+            "start": timestamp,
+            "end": timestamp,
+            "max_det_score": det_score,
+            "min_det_score": det_score,
+            "max_similarity": similarity if similarity is not None else None,
+            "min_similarity": similarity if similarity is not None else None,
+            "similarity_sum": similarity if similarity is not None else 0.0,
+            "similarity_count": 1 if similarity is not None else 0,
+            "matched_cluster_ids": set(clusters),
+            "matched_final_character_ids": set(final_ids),
+            "supporting_detections": [detection_summary],
+            "match_count": 1,
+        }
+
+    if current is not None:
+        highlights.append(_finalise_highlight(current))
+
+    return highlights
+
+
+def _summarise_highlight_support(
+    highlights: List[Dict[str, Any]],
+    *,
+    det_threshold: float,
+    similarity_threshold: float | None,
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "highlight_count": len(highlights),
+        "det_score_threshold": det_threshold,
+        "similarity_threshold": similarity_threshold,
+    }
+
+    if not highlights:
+        summary["matched_cluster_ids"] = []
+        summary["matched_final_character_ids"] = []
+        summary["match_count"] = 0
+        return summary
+
+    det_scores_max = [h.get("max_det_score") for h in highlights if _to_float(h.get("max_det_score")) is not None]
+    det_scores_min = [h.get("min_det_score") for h in highlights if _to_float(h.get("min_det_score")) is not None]
+    sim_values = [h.get("avg_similarity") for h in highlights if _to_float(h.get("avg_similarity")) is not None]
+    sim_max_values = [h.get("max_similarity") for h in highlights if _to_float(h.get("max_similarity")) is not None]
+    sim_min_values = [h.get("min_similarity") for h in highlights if _to_float(h.get("min_similarity")) is not None]
+
+    if det_scores_max:
+        summary["max_det_score"] = max(float(v) for v in det_scores_max)
+    if det_scores_min:
+        summary["min_det_score"] = min(float(v) for v in det_scores_min)
+    if sim_values:
+        avg = sum(float(v) for v in sim_values) / len(sim_values)
+        summary["avg_similarity"] = round(avg, 6)
+    if sim_max_values:
+        summary["max_similarity"] = max(float(v) for v in sim_max_values)
+    if sim_min_values:
+        summary["min_similarity"] = min(float(v) for v in sim_min_values)
+
+    clusters = set()
+    final_ids = set()
+    total_matches = 0
+    for highlight in highlights:
+        clusters.update(_coerce_str_set(highlight.get("matched_cluster_ids")))
+        final_ids.update(_coerce_str_set(highlight.get("matched_final_character_ids")))
+        count = highlight.get("match_count")
+        if isinstance(count, (int, np.integer)):
+            total_matches += int(count)
+
+    summary["matched_cluster_ids"] = sorted(clusters)
+    summary["matched_final_character_ids"] = sorted(final_ids)
+    summary["match_count"] = total_matches
+    return summary
+
+
 
 
 def _resolve_frame_file(
@@ -191,11 +477,23 @@ def _prepare_track_timeline(
     frames_dir: str | None,
     fps: float | None,
     track_id: Any,
+    *,
+    final_character_id: Any | None = None,
+    reference_embedding: np.ndarray | List[float] | None = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Create timeline entries and frame records for a given track."""
 
 
     base_dir = frames_dir if frames_dir and os.path.isdir(frames_dir) else None
+
+
+    reference_vec: np.ndarray | None = None
+    if reference_embedding is not None:
+        try:
+            reference_vec = l2_normalize(_as_array(reference_embedding))
+        except Exception:
+            reference_vec = None
+
 
     timeline_items: List[Dict[str, Any]] = []
     sample_frame_names: List[str] = []
@@ -234,7 +532,7 @@ def _prepare_track_timeline(
             except (TypeError, ValueError):
                 det_score_val = None
 
-        entry = {
+        entry: Dict[str, Any] = {
             "order": order_idx,
             "track_id": int(track_id) if track_id == track_id else None,
             "frame": frame_name,
@@ -245,6 +543,42 @@ def _prepare_track_timeline(
         }
         if det_score_val is not None:
             entry["det_score"] = det_score_val
+
+        cluster_value = getattr(row, "cluster_id", None)
+        if cluster_value is not None and cluster_value == cluster_value:
+            try:
+                entry["cluster_id"] = str(cluster_value)
+            except Exception:
+                pass
+        final_value = getattr(row, "final_character_id", None)
+        if final_value is not None and final_value == final_value:
+            try:
+                entry["final_character_id"] = str(final_value)
+            except Exception:
+                pass
+        character_value = getattr(row, "character_id", None)
+        if character_value is not None and character_value == character_value:
+            try:
+                entry["character_id"] = str(character_value)
+            except Exception:
+                pass
+        if final_character_id is not None:
+            try:
+                entry["scene_final_character_id"] = str(final_character_id)
+            except Exception:
+                pass
+
+        if reference_vec is not None and hasattr(row, "emb"):
+            emb_value = getattr(row, "emb")
+            if emb_value is not None:
+                try:
+                    emb_vec = l2_normalize(_as_array(emb_value))
+                except Exception:
+                    emb_vec = None
+                if emb_vec is not None and emb_vec.size == reference_vec.size:
+                    similarity = float(np.dot(emb_vec, reference_vec))
+                    if np.isfinite(similarity):
+                        entry["actor_similarity"] = similarity
 
         frame_path = None
         if base_dir:
@@ -447,6 +781,24 @@ def character_task():
     cfg = load_config()
     storage_cfg = cfg.get("storage", {})
     post_merge_cfg = cfg.get("post_merge", {})
+    highlight_cfg = cfg.get("highlights", {})
+
+    highlight_det_threshold = _parse_time(highlight_cfg.get("det_score_threshold"))
+    if highlight_det_threshold is None:
+        highlight_det_threshold = DEFAULT_HIGHLIGHT_DET_SCORE
+
+    highlight_gap_seconds = _parse_time(highlight_cfg.get("max_gap_seconds"))
+    if highlight_gap_seconds is None:
+        highlight_gap_seconds = DEFAULT_HIGHLIGHT_GAP_SECONDS
+
+    similarity_keys = ("min_similarity", "similarity_threshold", "min_similarity_score")
+    highlight_similarity_threshold: float | None = None
+    for key in similarity_keys:
+        highlight_similarity_threshold = _parse_time(highlight_cfg.get(key))
+        if highlight_similarity_threshold is not None:
+            break
+    if highlight_similarity_threshold is None:
+        highlight_similarity_threshold = DEFAULT_HIGHLIGHT_SIMILARITY
 
     clusters_path = storage_cfg["warehouse_clusters"]
     embeddings_path = storage_cfg.get("warehouse_embeddings")
@@ -736,6 +1088,15 @@ def character_task():
             rep_row: pd.Series | None = None
             scene_frame_count = 0
 
+            allowed_clusters: set[str] = set()
+            if "cluster_id" in tracks.columns:
+                allowed_clusters = {
+                    str(val)
+                    for val in tracks["cluster_id"].dropna().astype(str).unique().tolist()
+                    if str(val)
+                }
+
+
             movie_frames_dir = None
             if frames_root:
                 potential_dir = os.path.join(frames_root, movie_name)
@@ -770,84 +1131,106 @@ def character_task():
                             _safe_slug(item[1], "track"),
                         )
                     )
-
+                    cluster_lookup: Dict[Any, Any] = {}
+                    final_lookup: Dict[Any, Any] = {}
+                    if "track_id" in tracks.columns:
+                        track_meta = tracks.dropna(subset=["track_id"]).drop_duplicates(
+                            "track_id"
+                        )
+                        if "cluster_id" in track_meta.columns:
+                            cluster_lookup = track_meta.set_index("track_id")[
+                                "cluster_id"
+                            ].to_dict()
+                            cluster_lookup.update(
+                                {str(k): v for k, v in cluster_lookup.items() if k is not None}
+                            )
+                        if "final_character_id" in track_meta.columns:
+                            final_lookup = track_meta.set_index("track_id")[
+                                "final_character_id"
+                            ].to_dict()
+                            final_lookup.update(
+                                {str(k): v for k, v in final_lookup.items() if k is not None}
+                            )
                     for order_idx, (_, track_key, track_df) in enumerate(grouped_tracks):
+                        track_df = track_df.copy()
+                        lookup_key_variants = [track_key]
+                        try:
+                            lookup_key_variants.append(int(track_key))
+                        except (TypeError, ValueError):
+                            pass
+                        try:
+                            lookup_key_variants.append(str(track_key))
+                        except Exception:
+                            pass
+
+                        for variant in lookup_key_variants:
+                            if (
+                                "cluster_id" not in track_df.columns
+                                or track_df["cluster_id"].isna().all()
+                            ) and variant in cluster_lookup:
+                                track_df["cluster_id"] = cluster_lookup[variant]
+                            if (
+                                "final_character_id" not in track_df.columns
+                                or track_df["final_character_id"].isna().all()
+                            ) and variant in final_lookup:
+                                track_df["final_character_id"] = final_lookup[variant]
+
                         timeline_entries, frame_records = _prepare_track_timeline(
                             track_df,
                             movie_frames_dir,
                             fps,
                             track_key,
+                            final_character_id=final_id,
+                            reference_embedding=centroid_vec,
                         )
                         if not timeline_entries:
                             continue
 
-                        def _build_highlights(
-                                entries,
-                                det_th=HIGHLIGHT_MIN_CONFIDENCE,
-                                max_gap=HIGHLIGHT_MAX_GAP_SECONDS,
-                                extend_window=HIGHLIGHT_EXTEND_SECONDS,
-                                min_duration=HIGHLIGHT_MIN_DURATION,
-                                max_duration=HIGHLIGHT_MAX_DURATION,
-                        ):
-                            """Sinh highlight segment từ timeline detection, chỉ trả về thời gian để tua video gốc."""
+                        track_clusters: set[str] = set()
+                        if "cluster_id" in track_df.columns:
+                            track_clusters = {
+                                str(val)
+                                for val in track_df["cluster_id"]
+                                .dropna()
+                                .astype(str)
+                                .unique()
+                                .tolist()
+                                if str(val)
+                            }
 
-                            detected: List[Tuple[float, float]] = []
-                            for e in entries:
-                                ts = _parse_time(e.get("timestamp"))
-                                score = e.get("det_score", 0.0) or 0.0
-                                if ts is None or score < det_th:
-                                    continue
-                                detected.append((ts, score))
+                        matcher_clusters = track_clusters or allowed_clusters
+                        highlight_matcher = _make_highlight_matcher(
+                            final_id,
+                            matcher_clusters,
+                            highlight_similarity_threshold,
+                        )
+                        highlights = _build_highlights(
+                            timeline_entries,
+                            det_th=float(highlight_det_threshold),
+                            max_gap=float(highlight_gap_seconds),
+                            match_fn=highlight_matcher,
+                        )
 
-                            if not detected:
-                                return []
-
-                            detected.sort(key=lambda item: item[0])
-
-                            raw_segments: List[Dict[str, float]] = []
-                            current: Dict[str, float] | None = None
-                            for ts, score in detected:
-                                if current is None:
-                                    current = {"start": ts, "end": ts, "max_score": score}
-                                elif ts - current["end"] <= max_gap:
-                                    current["end"] = ts
-                                    current["max_score"] = max(current["max_score"], score)
-                                else:
-                                    raw_segments.append(current)
-                                    current = {"start": ts, "end": ts, "max_score": score}
-                            if current:
-                                raw_segments.append(current)
-
-                            processed: List[Dict[str, float]] = []
-                            for seg in raw_segments:
-                                seg_start, seg_end = seg["start"], seg["end"]
-                                duration = seg_end - seg_start
-                                if duration <= 0:
-                                    continue
-
-                                # Mở rộng thêm ngữ cảnh
-                                seg_start = max(seg_start - extend_window, 0.0)
-                                seg_end = seg_end + extend_window
-                                duration = seg_end - seg_start
-
-                                # Bắt buộc min/max
-                                if duration < min_duration:
-                                    seg_end = seg_start + min_duration
-                                    duration = min_duration
-                                if duration > max_duration:
-                                    seg_end = seg_start + max_duration
-                                    duration = max_duration
-
-                                processed.append({
-                                    "start": round(seg_start, 3),
-                                    "end": round(seg_end, 3),
-                                    "duration": round(duration, 3),
-                                    "max_score": round(seg["max_score"], 3),
-                                })
-
-                            return processed
-
-                        highlights = _build_highlights(timeline_entries)
+                        highlight_support = _summarise_highlight_support(
+                            highlights,
+                            det_threshold=float(highlight_det_threshold),
+                            similarity_threshold=highlight_similarity_threshold,
+                        )
+                        if matcher_clusters:
+                            highlight_support["allowed_cluster_ids"] = sorted(
+                                matcher_clusters
+                            )
+                        elif allowed_clusters:
+                            highlight_support["allowed_cluster_ids"] = sorted(
+                                allowed_clusters
+                            )
+                        if final_id is not None:
+                            try:
+                                highlight_support["target_final_character_id"] = str(
+                                    final_id
+                                )
+                            except Exception:
+                                pass
 
                         clip_fps_value = float(fps) if fps else DEFAULT_CLIP_FPS
                         timeline_to_store = timeline_entries
@@ -987,6 +1370,15 @@ def character_task():
                             "end_time": end_timestamp,
                         }
                         scene_entry["highlights"] = highlights
+                        scene_entry["highlight_support"] = highlight_support
+                        scene_entry["highlight_det_score_threshold"] = float(
+                            highlight_det_threshold
+                        )
+                        scene_entry["highlight_similarity_threshold"] = (
+                            float(highlight_similarity_threshold)
+                            if highlight_similarity_threshold is not None
+                            else None
+                        )
                         scenes.append(scene_entry)
 
                     rep_idx = (
