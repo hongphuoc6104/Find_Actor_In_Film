@@ -64,6 +64,26 @@ assert(
 
 console.log('Frontend snapshot tests passed.')
 
+const sceneViewerPath = resolve(dirname(fileURLToPath(import.meta.url)), '../src/components/SceneViewer.vue')
+const sceneViewerSource = await readFile(sceneViewerPath, 'utf-8')
+
+assert(
+  sceneViewerSource.includes('props.scene.highlights?.[0]?.start'),
+  'Scene viewer should prioritise the first highlight start time when available',
+)
+
+assert(
+  !sceneViewerSource.includes('clip_offset') && !sceneViewerSource.includes('clip_url'),
+  'Scene viewer should not reference clip-based offsets when seeking in the video',
+)
+
+assert(
+  sceneViewerSource.includes('videoRef.value.currentTime = segment.start'),
+  'Selecting a highlight should seek to its absolute start timestamp',
+)
+
+console.log('Scene viewer QA checks passed.')
+
 const timeline = [
   { timestamp: 10, clip_offset: 0, duration: 2.5, bbox: [0, 0, 100, 100] },
   { timestamp: 12.5, clip_offset: 2.5, duration: 2.5, bbox: [50, 50, 150, 150] },

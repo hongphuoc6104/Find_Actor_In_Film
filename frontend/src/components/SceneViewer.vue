@@ -102,10 +102,20 @@ const parseTimeValue = (value) => {
 
 const sceneStartTime = computed(() => {
   if (!props.scene) return null
-  const cands = [props.scene.start_time, props.scene.video_start_timestamp, props.scene.timestamp]
-  for (const c of cands) {
-    const parsed = parseTimeValue(c)
-    if (parsed !== null) return parsed
+
+  const highlightStart = Array.isArray(props.scene.highlights)
+    ? parseTimeValue(props.scene.highlights?.[0]?.start)
+    : null
+
+  const candidates = [
+    highlightStart,
+    parseTimeValue(props.scene.start_time),
+    parseTimeValue(props.scene.video_start_timestamp),
+    parseTimeValue(props.scene.timestamp),
+  ]
+
+  for (const candidate of candidates) {
+    if (candidate !== null) return candidate
   }
   return null
 })
@@ -119,15 +129,19 @@ const resetVideoState = () => {
   videoTime.value = safeStart
   pendingSeekTime.value = safeStart
   if (videoRef.value) {
-    try { videoRef.value.pause() } catch {}
+    try {
+      videoRef.value.pause()
+      if (Number.isFinite(safeStart)) videoRef.value.currentTime = safeStart
+    } catch {}
   }
 }
 
 const sceneVideo = computed(() => {
   if (!props.scene) return ''
   const sources = [
-    props.scene.video_url, props.scene.video, props.scene.video_path,
-    props.scene.clip_url, props.scene.clip_path
+    props.scene.video_url,
+    props.scene.video,
+    props.scene.video_path,
   ]
   const src = sources.find(s => typeof s === 'string' && s)
   return src ? toAbsoluteAssetUrl(src) : ''

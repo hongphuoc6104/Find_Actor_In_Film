@@ -421,12 +421,12 @@ def _convert_scene_entry(
             break
 
     if isinstance(video_source, str) and video_source:
-        video_source = os.path.basename(video_source)
-        converted["video_source"] = video_source
-        video_url = _build_video_url(video_source)
-        # normalized_source = video_source.replace("\\", "/")
-        # converted["video_source"] = normalized_source
-        # video_url = _build_video_url(normalized_source)
+        # video_source = os.path.basename(video_source)
+        # converted["video_source"] = video_source
+        # video_url = _build_video_url(video_source)
+        normalized_source = video_source.replace("\\", "/")
+        converted["video_source"] = normalized_source
+        video_url = _build_video_url(normalized_source)
         converted["video_url"] = video_url
         converted.setdefault("video", video_url)
     else:
@@ -707,6 +707,24 @@ def _expand_highlight_scenes(raw_scenes: Any) -> List[Dict[str, Any]]:
             scene_copy["highlight_total"] = highlight_total
             scene_copy["source_scene_index"] = source_scene_index
             scene_copy["scene_index"] = cursor_index
+
+            highlight_start = highlight.get("start")
+            highlight_end = highlight.get("end")
+            highlight_duration = _parse_float(highlight.get("duration"))
+            if highlight_duration is None and isinstance(highlight_start, (int, float)) and isinstance(highlight_end, (int, float)):
+                highlight_duration = max(highlight_end - highlight_start, 0.0)
+                highlight["duration"] = highlight_duration
+            if isinstance(highlight_start, (int, float)):
+                scene_copy["start_time"] = float(highlight_start)
+                scene_copy["video_start_timestamp"] = float(highlight_start)
+                scene_copy["clip_start_timestamp"] = float(highlight_start)
+            if isinstance(highlight_end, (int, float)):
+                scene_copy["end_time"] = float(highlight_end)
+                scene_copy["video_end_timestamp"] = float(highlight_end)
+                scene_copy["clip_end_timestamp"] = float(highlight_end)
+            if isinstance(highlight_duration, (int, float)):
+                scene_copy["duration"] = float(highlight_duration)
+
             expanded.append(scene_copy)
 
     return expanded

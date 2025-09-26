@@ -272,6 +272,8 @@ def test_scene_endpoint_flattens_highlights(tmp_path, monkeypatch):
             assert second_highlight["start"] == 20.0
             assert second_highlight["end"] == 24.0
             assert second_highlight["duration"] == 4.0
+            assert scene_two["start_time"] == second_highlight["start"]
+            assert scene_two["duration"] > 0
     finally:
         main._clear_character_cache()
 
