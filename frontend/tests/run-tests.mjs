@@ -3,8 +3,8 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
 import { pickActiveTimelineEntry } from '../src/utils/sceneTimeline.js'
-import { __test__ } from '../src/composables/useRecognitionStore.js'
 import { toAbsoluteAssetUrl, __test__ as assetUrlTest } from '../src/utils/assetUrls.js'
+import { useRecognitionStore, __test__ } from '../src/composables/useRecognitionStore.js'
 const { normaliseMovies, ensureFrameMetadata } = __test__
 
 const samplePayload = [
@@ -191,3 +191,124 @@ assert.equal(
 )
 
 console.log('Asset URL helper tests passed.')
+
+const highlightStore = useRecognitionStore()
+highlightStore.resetSearch()
+highlightStore.state.movies = [
+  {
+    movie_id: 'm1',
+    movie: 'Movie 1',
+    characters: [
+      {
+        movie_id: 'm1',
+        character_id: 'c1',
+        scene: null,
+        scene_index: null,
+        next_scene_cursor: null,
+        total_scenes: null,
+        has_more_scenes: false,
+        verificationStatus: null,
+        decisionHistory: [],
+      },
+    ],
+  },
+]
+highlightStore.state.selectedMovieId = 'm1'
+highlightStore.state.selectedCharacterId = 'c1'
+
+const highlightKey = 'm1::c1'
+
+highlightStore.updateSceneEntry({
+  movie_id: 'm1',
+  character_id: 'c1',
+  scene_index: 0,
+  next_cursor: 1,
+  total_scenes: 2,
+  scene: {
+    highlights: [{ start: 10, end: 12.5, max_score: 0.95 }],
+    highlight_index: 0,
+    highlight_total: 2,
+    source_scene_index: 0,
+  },
+})
+
+assert.equal(
+  highlightStore.state.scenes[highlightKey].scene_index,
+  0,
+  'First highlight should set cursor 0',
+)
+assert.equal(
+  highlightStore.state.scenes[highlightKey].next_cursor,
+  1,
+  'Next cursor should point to the second highlight',
+)
+assert.equal(
+  highlightStore.state.scenes[highlightKey].total_scenes,
+  2,
+  'Total highlights should be tracked',
+)
+assert.equal(
+  highlightStore.state.movies[0].characters[0].scene.highlights.length,
+  1,
+  'Character scene should use a single highlight segment',
+)
+assert.equal(
+  highlightStore.state.movies[0].characters[0].scene.scene_index,
+  0,
+  'Character scene should report the highlight cursor index',
+)
+assert.equal(
+  highlightStore.state.movies[0].characters[0].scene.highlight_total,
+  2,
+  'Character scene should retain highlight metadata',
+)
+assert.equal(
+  highlightStore.state.movies[0].characters[0].has_more_scenes,
+  true,
+  'Character should report remaining highlights',
+)
+
+highlightStore.updateSceneEntry({
+  movie_id: 'm1',
+  character_id: 'c1',
+  scene_index: 1,
+  next_cursor: null,
+  total_scenes: 2,
+  scene: {
+    highlights: [{ start: 30, end: 33.2, max_score: 0.88 }],
+    highlight_index: 1,
+    highlight_total: 2,
+    source_scene_index: 0,
+  },
+  has_more: false,
+})
+
+assert.equal(
+  highlightStore.state.scenes[highlightKey].scene_index,
+  1,
+  'Second highlight should update the cursor index',
+)
+assert.equal(
+  highlightStore.state.scenes[highlightKey].has_more,
+  false,
+  'Scene cache should report no further highlights',
+)
+assert.equal(
+  highlightStore.state.movies[0].characters[0].scene.highlight_index,
+  1,
+  'Character scene should switch to the second highlight',
+)
+assert.equal(
+  highlightStore.state.movies[0].characters[0].scene.scene_index,
+  1,
+  'Character scene should expose the updated cursor index',
+)
+assert.equal(
+  highlightStore.state.movies[0].characters[0].has_more_scenes,
+  false,
+  'Character should report no remaining highlights',
+)
+
+highlightStore.resetSearch()
+
+console.log('Highlight navigation tests passed.')

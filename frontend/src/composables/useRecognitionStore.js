@@ -142,10 +142,23 @@ const ensureFrameMetadata = (entry) => {
   }
 
   if (Array.isArray(entry.highlights)) {
-  copy.highlights = entry.highlights.map((h) =>
-    h && typeof h === 'object' ? { ...h } : h
-  )
-}
+    copy.highlights = entry.highlights.map((h) =>
+      h && typeof h === 'object' ? { ...h } : h,
+    )
+  }
+
+  if (entry.scene_index !== undefined) {
+    copy.scene_index = normaliseNumber(entry.scene_index, null)
+  }
+  if (entry.highlight_index !== undefined) {
+    copy.highlight_index = normaliseNumber(entry.highlight_index, null)
+  }
+  if (entry.highlight_total !== undefined) {
+    copy.highlight_total = normaliseNumber(entry.highlight_total, null)
+  }
+  if (entry.source_scene_index !== undefined) {
+    copy.source_scene_index = normaliseNumber(entry.source_scene_index, null)
+  }
 
   const frameSources = [
     entry.frame_url,
@@ -215,8 +228,12 @@ const resetSearch = () => {
 
 const normaliseCharacter = (character) => {
   const totalScenes = normaliseNumber(character?.total_scenes, null)
-  const nextCursor =
+  const rawNextCursor =
     character?.next_scene_cursor ?? character?.scene_cursor ?? null
+  const nextCursor =
+    rawNextCursor === null || rawNextCursor === undefined
+      ? null
+      : normaliseNumber(rawNextCursor, null)
 
   const repImage =
     character?.rep_image && typeof character?.rep_image === 'object'
@@ -256,7 +273,9 @@ const normaliseCharacter = (character) => {
     movies: Array.isArray(character?.movies) ? character.movies : [],
     scene: sceneEntry,
     scene_index:
-      character?.scene_index !== undefined ? character.scene_index : null,
+      character?.scene_index !== undefined
+        ? normaliseNumber(character.scene_index, null)
+        : null,
     next_scene_cursor: nextCursor,
     total_scenes: totalScenes,
     has_more_scenes:
@@ -312,16 +331,32 @@ const updateSceneEntry = (payload) => {
       ? ensureFrameMetadata(payload.scene)
       : payload?.scene ?? null
 
+  if (
+    sceneData &&
+    typeof sceneData === 'object' &&
+    payload?.scene_index !== null &&
+    payload?.scene_index !== undefined
+  ) {
+    sceneData.scene_index = normaliseNumber(payload.scene_index, null)
+  }
+
+
   const entry = {
     movie_id: movieId,
     character_id: characterId,
     scene_index:
-      payload.scene_index !== undefined ? payload.scene_index : null,
+      payload.scene_index !== undefined
+        ? normaliseNumber(payload.scene_index, null)
+        : null,
     scene: sceneData,
     next_cursor:
-      payload.next_cursor !== undefined ? payload.next_cursor : null,
+      payload.next_cursor !== undefined
+        ? normaliseNumber(payload.next_cursor, null)
+        : null,
     total_scenes:
-      payload.total_scenes !== undefined ? payload.total_scenes : null,
+      payload.total_scenes !== undefined
+        ? normaliseNumber(payload.total_scenes, null)
+        : null,
     has_more:
       payload.has_more !== undefined
         ? payload.has_more

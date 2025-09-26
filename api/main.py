@@ -336,6 +336,20 @@ def _apply_frame_metadata(
 
     return payload
 
+def _parse_float(value: Any) -> float | None:
+    """Best-effort conversion of a value to a finite float."""
+
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(result):
+        return None
+    return float(result)
+
+
 
 def _build_preview_url(path: str) -> str:
     """Convert an absolute preview path into an API URL."""
@@ -380,16 +394,16 @@ def _convert_scene_entry(
         converted, movie=effective_movie, movie_id=effective_movie_id
     )
 
-    def _parse_float(value: Any) -> float | None:
-        if value is None:
-            return None
-        try:
-            result = float(value)
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(result):
-            return None
-        return float(result)
+    # def _parse_float(value: Any) -> float | None:
+    #     if value is None:
+    #         return None
+    #     try:
+    #         result = float(value)
+    #     except (TypeError, ValueError):
+    #         return None
+    #     if not math.isfinite(result):
+    #         return None
+    #     return float(result)
 
     # --- Video source / URL ---
     video_source = None
@@ -410,6 +424,9 @@ def _convert_scene_entry(
         video_source = os.path.basename(video_source)
         converted["video_source"] = video_source
         video_url = _build_video_url(video_source)
+        # normalized_source = video_source.replace("\\", "/")
+        # converted["video_source"] = normalized_source
+        # video_url = _build_video_url(normalized_source)
         converted["video_url"] = video_url
         converted.setdefault("video", video_url)
     else:
@@ -633,8 +650,67 @@ def _convert_scene_entry(
             support_copy[key] = value
         converted["highlight_support"] = support_copy
 
-
     return converted
+
+
+def _expand_highlight_scenes(raw_scenes: Any) -> List[Dict[str, Any]]:
+    """Flatten highlight intervals into cursorable scene entries."""
+
+    if not isinstance(raw_scenes, list):
+        return []
+
+    expanded: List[Dict[str, Any]] = []
+
+    for source_index, scene in enumerate(raw_scenes):
+        if not isinstance(scene, dict):
+            continue
+
+        highlights = scene.get("highlights")
+        if not isinstance(highlights, list) or not highlights:
+            continue
+
+        raw_scene_index = scene.get("scene_index")
+        source_scene_index: int | None = None
+        if isinstance(raw_scene_index, int):
+            source_scene_index = raw_scene_index
+        else:
+            try:
+                source_scene_index = int(raw_scene_index)
+            except (TypeError, ValueError):
+                source_scene_index = None
+
+        if source_scene_index is None:
+            source_scene_index = source_index
+
+        valid_highlights: List[Dict[str, Any]] = []
+        for highlight in highlights:
+            if not isinstance(highlight, dict):
+                continue
+            start = _parse_float(highlight.get("start"))
+            end = _parse_float(highlight.get("end"))
+            if start is None or end is None or end < start:
+                continue
+            highlight_copy = dict(highlight)
+            highlight_copy["start"] = start
+            highlight_copy["end"] = end
+            valid_highlights.append(highlight_copy)
+
+        if not valid_highlights:
+            continue
+
+        highlight_total = len(valid_highlights)
+        for highlight_index, highlight in enumerate(valid_highlights):
+            cursor_index = len(expanded)
+            scene_copy = dict(scene)
+            scene_copy["highlights"] = [highlight]
+            scene_copy["highlight_index"] = highlight_index
+            scene_copy["highlight_total"] = highlight_total
+            scene_copy["source_scene_index"] = source_scene_index
+            scene_copy["scene_index"] = cursor_index
+            expanded.append(scene_copy)
+
+    return expanded
+
 
 def _convert_preview_entry(
     entry: Dict[str, Any],
@@ -804,15 +880,25 @@ async def scene_endpoint(request: SceneRequest) -> Dict[str, Any]:
     if character is None:
         raise HTTPException(status_code=404, detail="Character not found")
 
-    scenes = character.get("scenes")
-    if not isinstance(scenes, list) or not scenes:
-        raise HTTPException(status_code=404, detail="No scenes available")
+    # scenes = character.get("scenes")
+    # if not isinstance(scenes, list) or not scenes:
+    #     raise HTTPException(status_code=404, detail="No scenes available")
+
+    expanded_scenes = _expand_highlight_scenes(character.get("scenes"))
+    if not expanded_scenes:
+        raise HTTPException(
+            status_code=404, detail="No highlighted scenes available"
+        )
+
+
 
     cursor = request.cursor or 0
-    if cursor < 0 or cursor >= len(scenes):
+    # if cursor < 0 or cursor >= len(scenes):
+    if cursor < 0 or cursor >= len(expanded_scenes):
         raise HTTPException(status_code=404, detail="Scene cursor out of range")
 
-    scene_raw = scenes[cursor]
+    # scene_raw = scenes[cursor]
+    scene_raw = expanded_scenes[cursor]
     movie_label = (
         character.get("movie")
         or character.get("movie_name")
@@ -821,7 +907,21 @@ async def scene_endpoint(request: SceneRequest) -> Dict[str, Any]:
     scene_payload = _convert_scene_entry(
         scene_raw, movie=movie_label, movie_id=character.get("movie_id")
     )
-    next_cursor = cursor + 1 if cursor + 1 < len(scenes) else None
+    # next_cursor = cursor + 1 if cursor + 1 < len(scenes) else None
+
+    if isinstance(scene_payload, dict):
+        scene_payload["scene_index"] = cursor
+        if scene_raw.get("highlight_index") is not None:
+            scene_payload.setdefault("highlight_index", scene_raw["highlight_index"])
+        if scene_raw.get("highlight_total") is not None:
+            scene_payload.setdefault("highlight_total", scene_raw["highlight_total"])
+        if scene_raw.get("source_scene_index") is not None:
+            scene_payload.setdefault(
+                "source_scene_index", scene_raw["source_scene_index"]
+            )
+    total_scenes = len(expanded_scenes)
+    next_cursor = cursor + 1 if cursor + 1 < total_scenes else None
+
 
     return {
         "movie_id": str(request.movie_id),
@@ -829,7 +929,8 @@ async def scene_endpoint(request: SceneRequest) -> Dict[str, Any]:
         "scene_index": cursor,
         "scene": scene_payload,
         "next_cursor": next_cursor,
-        "total_scenes": len(scenes),
+        # "total_scenes": len(scenes),
+        "total_scenes": total_scenes,
         "has_more": next_cursor is not None,
     }
 

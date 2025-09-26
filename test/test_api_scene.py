@@ -3,8 +3,37 @@ import io
 import json
 import os
 import sys
-
+import types
 from fastapi.testclient import TestClient
+
+def _stub_insightface(monkeypatch):
+    app_module = types.ModuleType("insightface.app")
+
+    class _DummyFaceAnalysis:  # pragma: no cover - simple import stub
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def prepare(self, *args, **kwargs):
+            return None
+
+        def get(self, *args, **kwargs):
+            return []
+
+    app_module.FaceAnalysis = _DummyFaceAnalysis
+    insightface_module = types.ModuleType("insightface")
+    insightface_module.app = app_module
+
+    monkeypatch.setitem(sys.modules, "insightface", insightface_module)
+    monkeypatch.setitem(sys.modules, "insightface.app", app_module)
+
+    class _DummyDataFrame:
+        empty = True
+
+    pandas_module = types.ModuleType("pandas")
+    pandas_module.read_parquet = lambda *args, **kwargs: _DummyDataFrame()
+    monkeypatch.setitem(sys.modules, "pandas", pandas_module)
+
+
 
 
 def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
@@ -45,6 +74,9 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
                         "frame": frame_name,
                         "timestamp": 12.5,
                         "bbox": [10, 20, 110, 200],
+                        "highlights": [
+                            {"start": 12.5, "end": 17.5, "max_score": 0.93},
+                        ],
                         "timeline": [
                             {
                                 "frame": frame_name,
@@ -85,6 +117,7 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
     }
 
     monkeypatch.setattr("utils.config_loader.load_config", lambda: config)
+    _stub_insightface(monkeypatch)
     sys.modules.pop("api.main", None)
     main = importlib.import_module("api.main")
 
@@ -111,6 +144,9 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             assert scene.get("duration") == 5.0
             assert scene.get("width") == 640
             assert scene.get("height") == 360
+            assert scene.get("highlight_index") == 0
+            assert scene.get("highlight_total") == 1
+            assert scene.get("scene_index") == 0
 
             timeline = scene.get("timeline")
             assert isinstance(timeline, list) and len(timeline) == 2
@@ -126,6 +162,119 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             assert image_response.content
     finally:
         main._clear_character_cache()
+
+def test_scene_endpoint_flattens_highlights(tmp_path, monkeypatch):
+    frames_root = tmp_path / "frames"
+    previews_root = tmp_path / "previews"
+    characters_path = tmp_path / "characters.json"
+    clips_root = tmp_path / "clips"
+
+    movie_key = "movie1"
+    character_key = "char1"
+    movie_folder = "MOVIE_FOLDER"
+    frame_name = "frame_0001.jpg"
+    second_frame = "frame_0002.jpg"
+
+    (frames_root / movie_folder).mkdir(parents=True, exist_ok=True)
+    (frames_root / movie_folder / frame_name).write_bytes(b"frame")
+    (frames_root / movie_folder / second_frame).write_bytes(b"frame2")
+
+    characters = {
+        movie_key: {
+            character_key: {
+                "movie": movie_folder,
+                "scenes": [
+                    {
+                        "frame": frame_name,
+                        "scene_index": 4,
+                        "bbox": [0, 0, 20, 40],
+                        "highlights": [
+                            {"start": 10, "end": 12.5, "max_score": 0.95},
+                            {"start": 20, "end": 24, "max_score": 0.9},
+                        ],
+                    },
+                    {
+                        "frame": second_frame,
+                        "bbox": [10, 10, 30, 50],
+                        "highlights": [],
+                    },
+                ],
+            }
+        }
+    }
+
+    characters_path.write_text(json.dumps(characters), encoding="utf-8")
+
+    config = {
+        "storage": {
+            "frames_root": str(frames_root),
+            "cluster_previews_root": str(previews_root),
+            "scene_clips_root": str(clips_root),
+            "characters_json": str(characters_path),
+        }
+    }
+
+    monkeypatch.setattr("utils.config_loader.load_config", lambda: config)
+
+    _stub_insightface(monkeypatch)
+    sys.modules.pop("api.main", None)
+    main = importlib.import_module("api.main")
+
+    try:
+        with TestClient(main.app) as client:
+            first = client.post(
+                "/scene",
+                json={
+                    "movie_id": movie_key,
+                    "character_id": character_key,
+                    "cursor": 0,
+                },
+            )
+            assert first.status_code == 200
+            payload = first.json()
+            assert payload["scene_index"] == 0
+            assert payload["total_scenes"] == 2
+            assert payload["next_cursor"] == 1
+            assert payload["has_more"] is True
+
+            scene = payload["scene"]
+            assert scene["scene_index"] == 0
+            assert scene["highlight_index"] == 0
+            assert scene["highlight_total"] == 2
+            assert scene["source_scene_index"] == 4
+            assert len(scene["highlights"]) == 1
+            first_highlight = scene["highlights"][0]
+            assert first_highlight["start"] == 10.0
+            assert first_highlight["end"] == 12.5
+            assert first_highlight["duration"] == 2.5
+
+            second = client.post(
+                "/scene",
+                json={
+                    "movie_id": movie_key,
+                    "character_id": character_key,
+                    "cursor": 1,
+                },
+            )
+            assert second.status_code == 200
+            payload_two = second.json()
+            assert payload_two["scene_index"] == 1
+            assert payload_two["next_cursor"] is None
+            assert payload_two["has_more"] is False
+
+            scene_two = payload_two["scene"]
+            assert scene_two["scene_index"] == 1
+            assert scene_two["highlight_index"] == 1
+            assert scene_two["highlight_total"] == 2
+            assert scene_two["source_scene_index"] == 4
+            assert len(scene_two["highlights"]) == 1
+            second_highlight = scene_two["highlights"][0]
+            assert second_highlight["start"] == 20.0
+            assert second_highlight["end"] == 24.0
+            assert second_highlight["duration"] == 4.0
+    finally:
+        main._clear_character_cache()
+
 
 
 def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
@@ -161,6 +310,7 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
     }
 
     monkeypatch.setattr("utils.config_loader.load_config", lambda: config)
+    _stub_insightface(monkeypatch)
     sys.modules.pop("api.main", None)
     main = importlib.import_module("api.main")
 
