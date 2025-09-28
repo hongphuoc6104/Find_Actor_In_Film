@@ -75,6 +75,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { toAbsoluteAssetUrl } from '../utils/assetUrls.js'
+import { MIN_VIEWABLE_SEC, PAUSE_TOLERANCE_SEC, SEEK_PAD_SEC } from '../utils/config.js'
 
 const props = defineProps({
   scene: { type: Object, default: null },
@@ -91,22 +92,21 @@ const videoTime = ref(0)
 const pendingSeekTime = ref(null)
 const activeSegment = ref(null)
 
-const AUTO_PAUSE_TOLERANCE = 0.2
-const MIN_AUTO_PAUSE_DURATION = 0.35
-
 const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value)
 const isAfterSegment = (time, segment) => {
   if (!isFiniteNumber(time) || !segment) return false
   const end = isFiniteNumber(segment.end) ? segment.end : null
   if (end === null) return false
-  return time > end + AUTO_PAUSE_TOLERANCE
+  const tolerance = Number.isFinite(PAUSE_TOLERANCE_SEC) ? PAUSE_TOLERANCE_SEC : 0
+  return time > end + tolerance
 }
 const isWithinSegmentWindow = (time, segment) => {
   if (!isFiniteNumber(time) || !segment) return false
   const start = isFiniteNumber(segment.start) ? segment.start : null
   const end = isFiniteNumber(segment.end) ? segment.end : null
   if (start === null || end === null) return false
-  return time >= start && time <= end + AUTO_PAUSE_TOLERANCE
+  const tolerance = Number.isFinite(PAUSE_TOLERANCE_SEC) ? PAUSE_TOLERANCE_SEC : 0
+  return time >= start && time <= end + tolerance
 }
 
 
@@ -119,11 +119,22 @@ const parseTimeValue = (value) => {
   return Number.isFinite(n) && n >= 0 ? n : null
 }
 
+const getSeekPad = () => (Number.isFinite(SEEK_PAD_SEC) ? SEEK_PAD_SEC : 0)
+const computeSegmentSeekStart = (segment) => {
+  if (!segment) return null
+  const rawStart = parseTimeValue(typeof segment === 'number' ? segment : segment.start)
+  if (rawStart === null) return null
+  return Math.max(rawStart - getSeekPad(), 0)
+}
+
 const sceneStartTime = computed(() => {
+  const activeStart = computeSegmentSeekStart(activeSegment.value)
+  if (activeStart !== null) return activeStart
+
   if (!props.scene) return null
 
   const highlightStart = Array.isArray(props.scene.highlights)
-    ? parseTimeValue(props.scene.highlights?.[0]?.start)
+    ? computeSegmentSeekStart(props.scene.highlights?.[0])
     : null
 
   const candidates = [
@@ -142,6 +153,7 @@ const sceneStartTime = computed(() => {
 /* --- Video state --- */
 const resetImageSize = () => { imageSize.width = 0; imageSize.height = 0 }
 const resetVideoState = () => {
+  activeSegment.value = null
   videoSize.width = parseDimension(props.scene?.width)
   videoSize.height = parseDimension(props.scene?.height)
   const safeStart = sceneStartTime.value ?? 0
@@ -200,23 +212,23 @@ const timelineSegments = computed(() => {
 
   // Nếu API đã trả về highlights thì dùng luôn
   if (Array.isArray(props.scene.highlights) && props.scene.highlights.length) {
-  return props.scene.highlights.map((h, i) => {
-    const format = (ts) => {
-      if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
-      const m = Math.floor(ts / 60), s = Math.floor(ts % 60)
-      return `${m}:${s.toString().padStart(2, '0')}`
-    }
+    return props.scene.highlights.map((h, i) => {
+      const format = (ts) => {
+        if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
+        const m = Math.floor(ts / 60), s = Math.floor(ts % 60)
+        return `${m}:${s.toString().padStart(2, '0')}`
+      }
       return {
         id: i,
         order: i + 1,
-        label: `Cảnh ${i + 1} (score: ${(h.max_score*100).toFixed(0)}%)`,
+        label: `Cảnh ${i + 1} (score: ${(h.max_score * 100).toFixed(0)}%)`,
         range: `${format(h.start)} → ${format(h.end)} (${h.duration.toFixed(1)}s)`,
         start: h.start,
         end: h.end,
         active: isWithinSegmentWindow(videoTime.value, { start: h.start, end: h.end }),
       }
-  })
-}
+    })
+  }
 
 
   // Fallback: nếu chưa có highlights thì gộp từ timeline như trước
@@ -247,11 +259,21 @@ const timelineSegments = computed(() => {
 
 
 const seekToSegment = (segment) => {
-  if (videoRef.value) {
-    videoRef.value.currentTime = segment.start
-    videoRef.value.play()
-    activeSegment.value = segment
-  }
+  const targetTime = computeSegmentSeekStart(segment)
+  if (targetTime === null) return
+
+  pendingSeekTime.value = targetTime
+  activeSegment.value = segment
+  videoTime.value = targetTime
+
+  const video = videoRef.value
+  if (!video) return
+
+  try {
+    video.currentTime = targetTime
+  } catch {}
+  pendingSeekTime.value = null
+  video.play()
 }
 
 const onVideoTimeUpdate = (e) => {
@@ -269,7 +291,8 @@ const onVideoTimeUpdate = (e) => {
   }
 
   const segmentDuration = segment.end - segment.start
-  const isShortSegment = !isFiniteNumber(segmentDuration) || segmentDuration < MIN_AUTO_PAUSE_DURATION
+  const isShortSegment =
+    !isFiniteNumber(segmentDuration) || segmentDuration < (Number.isFinite(MIN_VIEWABLE_SEC) ? MIN_VIEWABLE_SEC : 0)
   if (!isAfterSegment(currentTime, segment)) {
     return
   }

@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { pickActiveTimelineEntry } from '../src/utils/sceneTimeline.js'
 import { toAbsoluteAssetUrl, __test__ as assetUrlTest } from '../src/utils/assetUrls.js'
 import { useRecognitionStore, __test__ } from '../src/composables/useRecognitionStore.js'
+import { __test__ as configTest } from '../src/utils/config.js'
 const { normaliseMovies, ensureFrameMetadata } = __test__
 
 const samplePayload = [
@@ -68,8 +69,8 @@ const sceneViewerPath = resolve(dirname(fileURLToPath(import.meta.url)), '../src
 const sceneViewerSource = await readFile(sceneViewerPath, 'utf-8')
 
 assert(
-  sceneViewerSource.includes('props.scene.highlights?.[0]?.start'),
-  'Scene viewer should prioritise the first highlight start time when available',
+  sceneViewerSource.includes('computeSegmentSeekStart(props.scene.highlights?.[0])'),
+  'Scene viewer should prioritise highlight starts using the padded seek helper when available',
 )
 
 assert(
@@ -78,11 +79,60 @@ assert(
 )
 
 assert(
-  sceneViewerSource.includes('videoRef.value.currentTime = segment.start'),
-  'Selecting a highlight should seek to its absolute start timestamp',
+  sceneViewerSource.includes('const targetTime = computeSegmentSeekStart(segment)'),
+  'Selecting a highlight should compute a padded seek target before seeking',
+)
+
+assert(
+  sceneViewerSource.includes('video.currentTime = targetTime'),
+  'Video playback should seek to the computed padded timestamp',
+)
+
+assert(
+  sceneViewerSource.includes('Math.max(rawStart - getSeekPad(), 0)'),
+  'Scene viewer should subtract the configured seek pad when determining highlight starts',
+)
+
+assert(
+  sceneViewerSource.includes('MIN_VIEWABLE_SEC'),
+  'Scene viewer should skip auto-pausing highlights shorter than the configured threshold',
+)
+
+assert(
+  sceneViewerSource.includes('PAUSE_TOLERANCE_SEC'),
+  'Scene viewer should rely on the configured tolerance when tracking highlight windows',
 )
 
 console.log('Scene viewer QA checks passed.')
+
+const { resolveConfigValue, toNumber, metaEnv, runtimeEnv, globalEnv } = configTest
+
+metaEnv.VITE_FAKE_TOLERANCE = '0.4'
+runtimeEnv.VITE_FAKE_TOLERANCE = '0.5'
+globalEnv.FAKE_TOLERANCE = '0.6'
+
+assert.equal(
+  resolveConfigValue('FAKE_TOLERANCE'),
+  '0.6',
+  'Config loader should prioritise runtime overrides injected into window.__APP_CONFIG__',
+)
+
+delete globalEnv.FAKE_TOLERANCE
+metaEnv.FAKE_TOLERANCE = '0.7'
+
+assert.equal(
+  resolveConfigValue('FAKE_TOLERANCE'),
+  '0.7',
+  'Config loader should read direct meta env keys before prefixed variants',
+)
+
+delete metaEnv.FAKE_TOLERANCE
+delete metaEnv.VITE_FAKE_TOLERANCE
+delete runtimeEnv.VITE_FAKE_TOLERANCE
+
+assert.equal(toNumber('1.25', 0), 1.25, 'Config loader should parse numeric strings correctly')
+assert.equal(toNumber('NaN', 0.3), 0.3, 'Config loader should fall back when values are invalid')
+
 
 const timeline = [
   { timestamp: 10, clip_offset: 0, duration: 2.5, bbox: [0, 0, 100, 100] },
