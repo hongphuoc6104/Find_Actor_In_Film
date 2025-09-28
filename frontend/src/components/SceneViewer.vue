@@ -91,6 +91,25 @@ const videoTime = ref(0)
 const pendingSeekTime = ref(null)
 const activeSegment = ref(null)
 
+const AUTO_PAUSE_TOLERANCE = 0.2
+const MIN_AUTO_PAUSE_DURATION = 0.35
+
+const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value)
+const isAfterSegment = (time, segment) => {
+  if (!isFiniteNumber(time) || !segment) return false
+  const end = isFiniteNumber(segment.end) ? segment.end : null
+  if (end === null) return false
+  return time > end + AUTO_PAUSE_TOLERANCE
+}
+const isWithinSegmentWindow = (time, segment) => {
+  if (!isFiniteNumber(time) || !segment) return false
+  const start = isFiniteNumber(segment.start) ? segment.start : null
+  const end = isFiniteNumber(segment.end) ? segment.end : null
+  if (start === null || end === null) return false
+  return time >= start && time <= end + AUTO_PAUSE_TOLERANCE
+}
+
+
 const parseDimension = (value) => {
   const n = Number(value)
   return Number.isFinite(n) && n > 0 ? n : 0
@@ -187,15 +206,15 @@ const timelineSegments = computed(() => {
       const m = Math.floor(ts / 60), s = Math.floor(ts % 60)
       return `${m}:${s.toString().padStart(2, '0')}`
     }
-    return {
-      id: i,
-      order: i + 1,
-      label: `Cảnh ${i + 1} (score: ${(h.max_score*100).toFixed(0)}%)`,
-      range: `${format(h.start)} → ${format(h.end)} (${h.duration.toFixed(1)}s)`,
-      start: h.start,
-      end: h.end,
-      active: videoTime.value >= h.start && videoTime.value <= h.end,
-    }
+      return {
+        id: i,
+        order: i + 1,
+        label: `Cảnh ${i + 1} (score: ${(h.max_score*100).toFixed(0)}%)`,
+        range: `${format(h.start)} → ${format(h.end)} (${h.duration.toFixed(1)}s)`,
+        start: h.start,
+        end: h.end,
+        active: isWithinSegmentWindow(videoTime.value, { start: h.start, end: h.end }),
+      }
   })
 }
 
@@ -218,7 +237,7 @@ const timelineSegments = computed(() => {
         range: `${format(seg.start)} → ${format(seg.end)}`,
         start: seg.start,
         end: seg.end,
-        active: videoTime.value >= seg.start && videoTime.value <= seg.end,
+        active: isWithinSegmentWindow(videoTime.value, { start: seg.start, end: seg.end }),
       }
     })
   }
@@ -238,11 +257,27 @@ const seekToSegment = (segment) => {
 const onVideoTimeUpdate = (e) => {
   const video = e?.target ?? videoRef.value
   if (!video) return
-  videoTime.value = video.currentTime ?? 0
-  if (activeSegment.value && video.currentTime >= activeSegment.value.end) {
-    video.pause()
+  const currentTime = video.currentTime ?? 0
+  videoTime.value = currentTime
+
+  if (!activeSegment.value) return
+
+  const segment = activeSegment.value
+  if (!isFiniteNumber(segment.start) || !isFiniteNumber(segment.end)) {
     activeSegment.value = null
+    return
   }
+
+  const segmentDuration = segment.end - segment.start
+  const isShortSegment = !isFiniteNumber(segmentDuration) || segmentDuration < MIN_AUTO_PAUSE_DURATION
+  if (!isAfterSegment(currentTime, segment)) {
+    return
+  }
+
+  if (!isShortSegment) {
+    video.pause()
+  }
+  activeSegment.value = null
 }
 
 const sceneDetails = computed(() => {

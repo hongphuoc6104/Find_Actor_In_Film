@@ -421,12 +421,12 @@ def _convert_scene_entry(
             break
 
     if isinstance(video_source, str) and video_source:
-        # video_source = os.path.basename(video_source)
-        # converted["video_source"] = video_source
-        # video_url = _build_video_url(video_source)
-        normalized_source = video_source.replace("\\", "/")
-        converted["video_source"] = normalized_source
-        video_url = _build_video_url(normalized_source)
+        video_source = os.path.basename(video_source)
+        converted["video_source"] = video_source
+        video_url = _build_video_url(video_source)
+        # normalized_source = video_source.replace("\\", "/")
+        # converted["video_source"] = normalized_source
+        # video_url = _build_video_url(normalized_source)
         converted["video_url"] = video_url
         converted.setdefault("video", video_url)
     else:
