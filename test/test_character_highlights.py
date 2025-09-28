@@ -5,6 +5,7 @@ pytest.importorskip("numpy")
 
 from tasks.character_task import (
     DEFAULT_HIGHLIGHT_DET_SCORE,
+    HIGHLIGHT_MIN_DURATION,
     _build_highlights,
     _make_highlight_matcher,
     _summarise_highlight_support,
@@ -114,3 +115,22 @@ def test_highlight_support_summary_tracks_scores():
     assert summary["max_det_score"] == pytest.approx(0.9, rel=1e-6)
     assert summary["min_det_score"] == pytest.approx(0.87, rel=1e-6)
     assert summary["avg_similarity"] == pytest.approx((0.85 + 0.8) / 2.0, rel=1e-6)
+
+
+def test_single_highlight_respects_minimum_duration():
+    entries = [
+        {
+            "timestamp": 10.0,
+            "det_score": 0.92,
+            "cluster_id": "cluster-A",
+        }
+    ]
+
+    highlights = _build_highlights(entries, match_fn=lambda _: True)
+
+    assert len(highlights) == 1
+    highlight = highlights[0]
+    duration = highlight.get("duration")
+    assert duration is not None
+    assert duration >= HIGHLIGHT_MIN_DURATION - 1e-6
+    assert highlight["end"] - highlight["start"] >= HIGHLIGHT_MIN_DURATION - 1e-6

@@ -30,9 +30,9 @@ DEFAULT_HIGHLIGHT_GAP_SECONDS = 2.0
 DEFAULT_HIGHLIGHT_SIMILARITY = 0.35
 MAX_HIGHLIGHT_SAMPLES = 10
 
-# HIGHLIGHT_MIN_DURATION = 4.0   # tối thiểu 4s
-# HIGHLIGHT_MAX_DURATION = 60.0  # tối đa 60s
-# HIGHLIGHT_EXTEND_SECONDS = 2.0 # mở rộng thêm 2s trước sau
+HIGHLIGHT_MIN_DURATION = 4.0  # tối thiểu 4s
+HIGHLIGHT_MAX_DURATION = 60.0  # tối đa 60s
+HIGHLIGHT_EXTEND_SECONDS = 2.0  # mở rộng thêm 2s trước sau
 # HIGHLIGHT_MIN_CONFIDENCE = 0.85
 # HIGHLIGHT_MAX_GAP_SECONDS = 2.0
 
@@ -164,10 +164,76 @@ def _summarise_detection(
     return summary
 
 
-def _finalise_highlight(accumulator: Dict[str, Any]) -> Dict[str, Any]:
+def _finalise_highlight(
+    accumulator: Dict[str, Any],
+    *,
+    timeline_start: float | None = None,
+    timeline_end: float | None = None,
+) -> Dict[str, Any]:
+    start_val = _parse_time(accumulator.get("start"))
+    end_val = _parse_time(accumulator.get("end"))
+
+    if start_val is None:
+        start_val = float(accumulator["start"])
+    if end_val is None:
+        end_val = float(accumulator["end"])
+
+    start = float(start_val)
+    end = float(end_val)
+    if end < start:
+        end = start
+
+    start_bound = _parse_time(timeline_start)
+    if start_bound is None:
+        start_bound = 0.0
+    end_bound = _parse_time(timeline_end)
+
+    if HIGHLIGHT_EXTEND_SECONDS > 0:
+        start -= float(HIGHLIGHT_EXTEND_SECONDS)
+        end += float(HIGHLIGHT_EXTEND_SECONDS)
+
+    start = max(start, start_bound)
+    if end_bound is not None:
+        end = min(end, end_bound)
+    if end < start:
+        end = start
+
+    min_duration = float(HIGHLIGHT_MIN_DURATION)
+    duration = end - start
+    if duration < min_duration:
+        deficit = min_duration - duration
+
+        available_before = start - start_bound
+        if available_before < 0:
+            available_before = 0.0
+        available_after = float("inf")
+        if end_bound is not None:
+            available_after = max(end_bound - end, 0.0)
+
+        extend_before = min(deficit / 2.0, available_before)
+        start -= extend_before
+        deficit -= extend_before
+
+        extend_after = min(deficit, available_after)
+        end += extend_after
+        deficit -= extend_after
+
+        if deficit > 0:
+            end += deficit
+
+        duration = end - start
+
+    max_duration = float(HIGHLIGHT_MAX_DURATION) if HIGHLIGHT_MAX_DURATION else None
+    if max_duration is not None and duration > max_duration:
+        excess = duration - max_duration
+        end -= excess
+        if end < start:
+            end = start
+        duration = end - start
+
     result = {
-        "start": accumulator["start"],
-        "end": accumulator["end"],
+        "start": round(start, 3),
+        "end": round(end, 3),
         "max_score": accumulator["max_det_score"],
         "max_det_score": accumulator["max_det_score"],
         "min_det_score": accumulator["min_det_score"],
@@ -184,9 +250,10 @@ def _finalise_highlight(accumulator: Dict[str, Any]) -> Dict[str, Any]:
         result["avg_similarity"] = round(avg_sim, 6)
         result["max_similarity"] = accumulator["max_similarity"]
         result["min_similarity"] = accumulator["min_similarity"]
-    duration = accumulator["end"] - accumulator["start"]
+
     if duration >= 0:
         result["duration"] = round(duration, 3)
+
     return result
 
 
@@ -235,6 +302,17 @@ def _build_highlights(
     max_gap: float = DEFAULT_HIGHLIGHT_GAP_SECONDS,
     match_fn: Any | None = None,
 ) -> List[Dict[str, Any]]:
+    timeline_start: float | None = None
+    timeline_end: float | None = None
+    for timeline_entry in entries:
+        ts = _parse_time(timeline_entry.get("timestamp"))
+        if ts is None:
+            continue
+        if timeline_start is None or ts < timeline_start:
+            timeline_start = ts
+        if timeline_end is None or ts > timeline_end:
+            timeline_end = ts
+
     highlights: List[Dict[str, Any]] = []
     current: Dict[str, Any] | None = None
 
@@ -306,7 +384,11 @@ def _build_highlights(
                 current["supporting_detections"].append(detection_summary)
             continue
 
-        highlights.append(_finalise_highlight(current))
+        highlights.append(
+            _finalise_highlight(
+                current, timeline_start=timeline_start, timeline_end=timeline_end
+            )
+        )
         current = {
             "start": timestamp,
             "end": timestamp,
@@ -323,7 +405,11 @@ def _build_highlights(
         }
 
     if current is not None:
-        highlights.append(_finalise_highlight(current))
+        highlights.append(
+            _finalise_highlight(
+                current, timeline_start=timeline_start, timeline_end=timeline_end
+            )
+        )
 
     return highlights
 
