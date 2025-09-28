@@ -1,0 +1,344 @@
+.
+├── api
+│   ├── main.py
+│   └── __pycache__
+│       └── main.cpython-310.pyc
+├── cli
+│   ├── find_actor.py
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── find_actor.cpython-310.pyc
+│   │   ├── __init__.cpython-310.pyc
+│   │   └── search_viewer.cpython-310.pyc
+│   └── search_viewer.py
+├── configs
+│   └── config.yaml
+├── cuda-keyring_1.1-1_all.deb
+├── Data
+│   ├── embeddings
+│   │   ├── EMCHUA18.parquet
+│   │   ├── GAIGIALAMCHIEU.parquet
+│   │   └── KEANDANH.parquet
+│   ├── face_crops
+│   │   ├── EMCHUA18
+│   │   ├── GAIGIALAMCHIEU
+│   │   └── KEANDANH
+│   ├── frames
+│   │   ├── EMCHUA18
+│   │   ├── GAIGIALAMCHIEU
+│   │   └── KEANDANH
+│   ├── metadata.json
+│   └── video
+│       ├── EMCHUA18.mp4
+│       ├── GAIGIALAMCHIEU.mp4
+│       └── KEANDANH.mp4
+├── docs
+├── face_search.egg-info
+│   ├── dependency_links.txt
+│   ├── PKG-INFO
+│   ├── SOURCES.txt
+│   └── top_level.txt
+├── flows
+│   ├── __init__.py
+│   ├── pipeline.py
+│   └── __pycache__
+│       ├── __init__.cpython-310.pyc
+│       ├── __init__.cpython-312.pyc
+│       ├── pipeline.cpython-310.pyc
+│       └── pipeline.cpython-312.pyc
+├── frontend
+│   ├── index.html
+│   ├── node_modules
+│   │   ├── asynckit
+│   │   ├── axios
+│   │   ├── @babel
+│   │   ├── call-bind-apply-helpers
+│   │   ├── combined-stream
+│   │   ├── csstype
+│   │   ├── delayed-stream
+│   │   ├── dunder-proto
+│   │   ├── entities
+│   │   ├── @esbuild
+│   │   ├── esbuild
+│   │   ├── es-define-property
+│   │   ├── es-errors
+│   │   ├── es-object-atoms
+│   │   ├── es-set-tostringtag
+│   │   ├── estree-walker
+│   │   ├── follow-redirects
+│   │   ├── form-data
+│   │   ├── function-bind
+│   │   ├── get-intrinsic
+│   │   ├── get-proto
+│   │   ├── gopd
+│   │   ├── hasown
+│   │   ├── has-symbols
+│   │   ├── has-tostringtag
+│   │   ├── @jridgewell
+│   │   ├── magic-string
+│   │   ├── math-intrinsics
+│   │   ├── mime-db
+│   │   ├── mime-types
+│   │   ├── nanoid
+│   │   ├── picocolors
+│   │   ├── postcss
+│   │   ├── proxy-from-env
+│   │   ├── @rollup
+│   │   ├── rollup
+│   │   ├── source-map-js
+│   │   ├── @types
+│   │   ├── vite
+│   │   ├── @vitejs
+│   │   ├── @vue
+│   │   └── vue
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── public
+│   │   └── vite.svg
+│   ├── README.md
+│   ├── src
+│   │   ├── App.vue
+│   │   ├── assets
+│   │   ├── components
+│   │   ├── composables
+│   │   ├── config.js
+│   │   ├── main.js
+│   │   ├── utils
+│   │   └── views
+│   ├── tests
+│   │   └── run-tests.mjs
+│   └── vite.config.js
+├── gateway
+│   ├── node_modules
+│   │   ├── accepts
+│   │   ├── append-field
+│   │   ├── asynckit
+│   │   ├── axios
+│   │   ├── body-parser
+│   │   ├── buffer-from
+│   │   ├── busboy
+│   │   ├── bytes
+│   │   ├── call-bind-apply-helpers
+│   │   ├── call-bound
+│   │   ├── combined-stream
+│   │   ├── concat-stream
+│   │   ├── content-disposition
+│   │   ├── content-type
+│   │   ├── cookie
+│   │   ├── cookie-signature
+│   │   ├── cors
+│   │   ├── debug
+│   │   ├── delayed-stream
+│   │   ├── depd
+│   │   ├── dotenv
+│   │   ├── dunder-proto
+│   │   ├── ee-first
+│   │   ├── encodeurl
+│   │   ├── escape-html
+│   │   ├── es-define-property
+│   │   ├── es-errors
+│   │   ├── es-object-atoms
+│   │   ├── es-set-tostringtag
+│   │   ├── etag
+│   │   ├── express
+│   │   ├── finalhandler
+│   │   ├── follow-redirects
+│   │   ├── form-data
+│   │   ├── forwarded
+│   │   ├── fresh
+│   │   ├── function-bind
+│   │   ├── get-intrinsic
+│   │   ├── get-proto
+│   │   ├── gopd
+│   │   ├── hasown
+│   │   ├── has-symbols
+│   │   ├── has-tostringtag
+│   │   ├── http-errors
+│   │   ├── iconv-lite
+│   │   ├── inherits
+│   │   ├── ipaddr.js
+│   │   ├── is-promise
+│   │   ├── math-intrinsics
+│   │   ├── media-typer
+│   │   ├── merge-descriptors
+│   │   ├── mime-db
+│   │   ├── mime-types
+│   │   ├── minimist
+│   │   ├── mkdirp
+│   │   ├── ms
+│   │   ├── multer
+│   │   ├── negotiator
+│   │   ├── object-assign
+│   │   ├── object-inspect
+│   │   ├── once
+│   │   ├── on-finished
+│   │   ├── parseurl
+│   │   ├── path-to-regexp
+│   │   ├── proxy-addr
+│   │   ├── proxy-from-env
+│   │   ├── qs
+│   │   ├── range-parser
+│   │   ├── raw-body
+│   │   ├── readable-stream
+│   │   ├── router
+│   │   ├── safe-buffer
+│   │   ├── safer-buffer
+│   │   ├── send
+│   │   ├── serve-static
+│   │   ├── setprototypeof
+│   │   ├── side-channel
+│   │   ├── side-channel-list
+│   │   ├── side-channel-map
+│   │   ├── side-channel-weakmap
+│   │   ├── statuses
+│   │   ├── streamsearch
+│   │   ├── string_decoder
+│   │   ├── toidentifier
+│   │   ├── typedarray
+│   │   ├── type-is
+│   │   ├── unpipe
+│   │   ├── util-deprecate
+│   │   ├── vary
+│   │   ├── wrappy
+│   │   └── xtend
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── server.js
+│   └── uploads
+├── handover
+│   ├── pip_freeze.txt
+│   └── structure.txt
+├── logs
+│   └── track_quality.csv
+├── models
+│   ├── character_index.faiss
+│   ├── character_index_map.json
+│   └── pca_model.joblib
+├── notebooks
+│   ├── cluster_eval.ipynb
+│   ├── inspect_clusters.py
+│   ├── __pycache__
+│   │   ├── inspect_clusters.cpython-310.pyc
+│   │   └── tune_clustering.cpython-310.pyc
+│   └── tune_clustering.py
+├── __pycache__
+├── pyproject.toml
+├── README.md
+├── reports
+│   └── cluster_metrics.csv
+├── requirements.txt
+├── scripts
+│   ├── benchmark.py
+│   ├── evaluate_clusters.py
+│   ├── explore_distance_distribution.py
+│   └── filter_low_quality_frames.py
+├── services
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-310.pyc
+│   │   └── recognition.cpython-310.pyc
+│   └── recognition.py
+├── tasks
+│   ├── build_warehouse_task.py
+│   ├── character_task.py
+│   ├── cluster_task.py
+│   ├── embedding_task.py
+│   ├── filter_clusters_task.py
+│   ├── ingestion_task.py
+│   ├── __init__.py
+│   ├── merge_clusters_task.py
+│   ├── pca_task.py
+│   ├── preview_clusters_task.py
+│   ├── __pycache__
+│   │   ├── build_warehouse_task.cpython-310.pyc
+│   │   ├── character_task.cpython-310.pyc
+│   │   ├── cluster_task.cpython-310.pyc
+│   │   ├── embedding_task.cpython-310.pyc
+│   │   ├── filter_clusters_task.cpython-310.pyc
+│   │   ├── ingestion_task.cpython-310.pyc
+│   │   ├── __init__.cpython-310.pyc
+│   │   ├── merge_clusters_task.cpython-310.pyc
+│   │   ├── pca_task.cpython-310.pyc
+│   │   ├── preview_clusters_task.cpython-310.pyc
+│   │   ├── tracklet_task.cpython-310.pyc
+│   │   └── validation_task.cpython-310.pyc
+│   ├── tracklet_task.py
+│   └── validation_task.py
+├── test
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-310.pyc
+│   │   ├── test_api_scene.cpython-310-pytest-8.4.1.pyc
+│   │   ├── test_build_warehouse_task.cpython-310-pytest-8.4.1.pyc
+│   │   ├── test_character_highlights.cpython-310-pytest-8.4.1.pyc
+│   │   ├── test_cluster_task.cpython-310-pytest-8.4.1.pyc
+│   │   ├── test_find_actor_cli.cpython-310-pytest-8.4.1.pyc
+│   │   ├── test_pipeline_index.cpython-310-pytest-8.4.1.pyc
+│   │   ├── test_recognition_service.cpython-310-pytest-8.4.1.pyc
+│   │   ├── test_search_actor.cpython-310-pytest-8.4.1.pyc
+│   │   ├── test_search_actor_util.cpython-310-pytest-8.4.1.pyc
+│   │   └── test_vector_utils.cpython-310-pytest-8.4.1.pyc
+│   ├── test_api_scene.py
+│   ├── test_build_warehouse_task.py
+│   ├── test_character_highlights.py
+│   ├── test_cluster_task.py
+│   ├── test_find_actor_cli.py
+│   ├── test_pipeline_index.py
+│   ├── test_recognition_service.py
+│   ├── test_search_actor.py
+│   ├── test_search_actor_util.py
+│   └── test_vector_utils.py
+├── utils
+│   ├── config_loader.py
+│   ├── image_utils.py
+│   ├── indexer.py
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── config_loader.cpython-310.pyc
+│   │   ├── image_utils.cpython-310.pyc
+│   │   ├── indexer.cpython-310.pyc
+│   │   ├── __init__.cpython-310.pyc
+│   │   ├── search_actor.cpython-310.pyc
+│   │   └── vector_utils.cpython-310.pyc
+│   ├── search_actor.py
+│   └── vector_utils.py
+└── warehouse
+    ├── characters.json
+    ├── cluster_previews
+    │   ├── cluster_0_0
+    │   ├── cluster_0_1
+    │   ├── cluster_0_10
+    │   ├── cluster_0_11
+    │   ├── cluster_0_12
+    │   ├── cluster_0_13
+    │   ├── cluster_0_14
+    │   ├── cluster_0_15
+    │   ├── cluster_0_2
+    │   ├── cluster_0_3
+    │   ├── cluster_0_4
+    │   ├── cluster_0_5
+    │   ├── cluster_0_6
+    │   ├── cluster_0_7
+    │   ├── cluster_0_8
+    │   ├── cluster_0_9
+    │   ├── cluster_1_0
+    │   ├── cluster_1_1
+    │   ├── cluster_1_10
+    │   ├── cluster_1_2
+    │   ├── cluster_1_3
+    │   ├── cluster_1_4
+    │   ├── cluster_1_5
+    │   ├── cluster_1_6
+    │   ├── cluster_1_7
+    │   ├── cluster_1_8
+    │   └── cluster_1_9
+    ├── __init__.py
+    ├── parquet
+    │   ├── clusters_merged.parquet
+    │   ├── clusters.parquet
+    │   ├── embeddings.parquet
+    │   └── embeddings_pca.parquet
+    ├── scene_clips
+    └── update_pipeline.py
+
+214 directories, 128 files

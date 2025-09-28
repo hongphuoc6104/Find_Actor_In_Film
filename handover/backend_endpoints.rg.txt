@@ -1,0 +1,4 @@
+api/main.py:886:@app.get("/movies")
+api/main.py:893:@app.post("/scene")
+api/main.py:956:@app.post("/upload")
+api/main.py:975:@app.post("/recognize")

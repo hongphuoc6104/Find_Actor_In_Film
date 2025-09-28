@@ -1,0 +1,29 @@
+frontend@0.0.0 /home/hongphuoc/Desktop/myproject/frontend
+├─┬ @vitejs/plugin-vue@5.2.4
+│ ├── vite@5.4.20 deduped
+│ └── vue@3.5.21 deduped
+├─┬ axios@1.12.2
+│ ├── follow-redirects@1.15.11
+│ ├── form-data@4.0.4
+│ └── proxy-from-env@1.1.0
+├─┬ vite@5.4.20
+│ ├── UNMET OPTIONAL DEPENDENCY @types/node@^18.0.0 || >=20.0.0
+│ ├── esbuild@0.21.5
+│ ├── UNMET OPTIONAL DEPENDENCY fsevents@~2.3.3
+│ ├── UNMET OPTIONAL DEPENDENCY less@*
+│ ├── UNMET OPTIONAL DEPENDENCY lightningcss@^1.21.0
+│ ├── postcss@8.5.6
+│ ├── rollup@4.50.2
+│ ├── UNMET OPTIONAL DEPENDENCY sass-embedded@*
+│ ├── UNMET OPTIONAL DEPENDENCY sass@*
+│ ├── UNMET OPTIONAL DEPENDENCY stylus@*
+│ ├── UNMET OPTIONAL DEPENDENCY sugarss@*
+│ └── UNMET OPTIONAL DEPENDENCY terser@^5.4.0
+└─┬ vue@3.5.21
+  ├── @vue/compiler-dom@3.5.21
+  ├── @vue/compiler-sfc@3.5.21
+  ├── @vue/runtime-dom@3.5.21
+  ├── @vue/server-renderer@3.5.21
+  ├── @vue/shared@3.5.21
+  └── UNMET OPTIONAL DEPENDENCY typescript@*
+
