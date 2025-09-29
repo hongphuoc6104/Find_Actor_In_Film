@@ -338,21 +338,25 @@ def _make_highlight_matcher(
         final_ids = _coerce_str_set(entry.get("final_character_id"))
         final_ids.update(_coerce_str_set(entry.get("final_character_ids")))
 
+        has_final_match = bool(allowed_final_ids and final_ids & allowed_final_ids)
+        has_cluster_match = bool(allowed_clusters and clusters & allowed_clusters)
+
+        if allowed_final_ids or allowed_clusters:
+            return has_final_match or has_cluster_match
+
+
         similarity: float | None = None
         for key in ("actor_similarity", "similarity", "character_similarity"):
             similarity = _to_float(entry.get(key))
             if similarity is not None:
                 break
 
-        has_final_match = bool(allowed_final_ids and final_ids & allowed_final_ids)
-        has_cluster_match = bool(allowed_clusters and clusters & allowed_clusters)
-        has_similarity_match = (
+        return (
             similarity_threshold is not None
             and similarity is not None
             and similarity >= similarity_threshold
         )
 
-        return has_final_match or has_cluster_match or has_similarity_match
 
     return _matcher
 
@@ -482,20 +486,23 @@ def _build_highlights(
         #         continue
 
         det_score = _to_float(entry.get("det_score"))
-        if det_th is not None and (det_score is None or det_score < det_th):
-            continue
 
         similarity = _extract_similarity(entry)
 
-        # 🔑 logic mới: phải match_fn hoặc similarity đủ
-        ok = False
-        if match_fn is not None and match_fn(entry):
-            ok = True
-        elif sim_threshold is not None and similarity is not None and similarity >= sim_threshold:
-            ok = True
+        matches_target = bool(match_fn and match_fn(entry))
+        if det_th is not None and (det_score is None or det_score < det_th):
+            if not matches_target:
+                continue
 
-        if not ok:
-            continue
+        if match_fn is not None:
+            if not matches_target:
+                continue
+        else:
+            if sim_threshold is not None:
+                if similarity is None or similarity < sim_threshold:
+                    continue
+            elif similarity is None:
+                continue
 
 
 
