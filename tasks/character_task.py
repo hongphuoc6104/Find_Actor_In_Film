@@ -13,7 +13,7 @@ import pandas as pd
 from prefect import task
 from sklearn.cluster import AgglomerativeClustering
 
-from utils.config_loader import load_config
+from utils.config_loader import get_highlight_settings, load_config
 from utils.indexer import build_index
 from utils.vector_utils import _mean_vector, l2_normalize
 from tasks.filter_clusters_task import filter_clusters_task
@@ -25,15 +25,20 @@ MAX_CLIP_DURATION = 10.0
 PRE_CLIP_BUFFER_SECONDS = 1.0
 POST_CLIP_BUFFER_SECONDS = 1.0
 DEFAULT_FRAME_EXTENSIONS = [".jpg", ".jpeg", ".png"]
-DEFAULT_HIGHLIGHT_DET_SCORE = 0.8
-DEFAULT_HIGHLIGHT_GAP_SECONDS = 2.0
+_HIGHLIGHT_SETTINGS = get_highlight_settings()
+
+DEFAULT_HIGHLIGHT_DET_SCORE = float(_HIGHLIGHT_SETTINGS["MIN_SCORE"])
+DEFAULT_HIGHLIGHT_GAP_SECONDS = float(_HIGHLIGHT_SETTINGS["MERGE_GAP_SEC"])
 DEFAULT_HIGHLIGHT_SIMILARITY = 0.35
 MAX_HIGHLIGHT_SAMPLES = 10
 
-HIGHLIGHT_MIN_DURATION = 4.0  # tối thiểu 4s
+HIGHLIGHT_MIN_DURATION = float(_HIGHLIGHT_SETTINGS["MIN_HL_DURATION_SEC"])  # tối thiểu 4s
 HIGHLIGHT_MAX_DURATION = 60.0  # tối đa 60s
 HIGHLIGHT_EXTEND_SECONDS = 2.0  # mở rộng thêm 2s trước sau
+# Giới hạn số highlight trên mỗi cảnh (None nghĩa là không giới hạn)
+TOP_HIGHLIGHTS_PER_SCENE = _HIGHLIGHT_SETTINGS["TOP_K_HL_PER_SCENE"]
 # HIGHLIGHT_MIN_CONFIDENCE = 0.85
+# HIGHLIGHT_MAX_GAP_SECONDS = 2.0
 # HIGHLIGHT_MAX_GAP_SECONDS = 2.0
 
 
@@ -412,6 +417,45 @@ def _build_highlights(
         )
 
     return highlights
+
+
+def _limit_highlights_per_scene(
+    highlights: List[Dict[str, Any]], limit: int | None
+) -> List[Dict[str, Any]]:
+    """Giới hạn số highlight theo cấu hình mà vẫn giữ thứ tự thời gian."""
+
+    if not highlights:
+        return []
+    if limit is None or limit <= 0 or len(highlights) <= limit:
+        return list(highlights)
+
+    def _score(item: Dict[str, Any]) -> float:
+        for key in ("max_det_score", "max_score", "avg_similarity"):
+            value = _to_float(item.get(key))
+            if value is not None:
+                return float(value)
+        return 0.0
+
+    def _match_count(item: Dict[str, Any]) -> int:
+        count = item.get("match_count")
+        if isinstance(count, (int, np.integer)):
+            return int(count)
+        try:
+            return int(count)
+        except (TypeError, ValueError):
+            return 0
+
+    ranked = sorted(
+        highlights,
+        key=lambda item: (
+            -_score(item),
+            -_match_count(item),
+            _parse_time(item.get("start")) or float("inf"),
+        ),
+    )
+    limited = ranked[:limit]
+    limited.sort(key=lambda item: _parse_time(item.get("start")) or float("inf"))
+    return limited
 
 
 def _summarise_highlight_support(
@@ -1296,6 +1340,10 @@ def character_task():
                             max_gap=float(highlight_gap_seconds),
                             match_fn=highlight_matcher,
                         )
+                        highlights = _limit_highlights_per_scene(
+                            highlights, TOP_HIGHLIGHTS_PER_SCENE
+                        )
+
 
                         highlight_support = _summarise_highlight_support(
                             highlights,

@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from services.recognition import recognize
-from utils.config_loader import load_config
+from utils.config_loader import get_highlight_settings, load_config
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRAMES_ROUTE = "/frames"
@@ -25,6 +25,9 @@ PREVIEWS_ROUTE = "/previews"
 CLIPS_ROUTE = "/clips"
 VIDEOS_ROUTE = "/videos"
 logger = logging.getLogger(__name__)
+
+_HIGHLIGHT_SETTINGS = get_highlight_settings()
+_HIGHLIGHT_LIMIT = _HIGHLIGHT_SETTINGS["TOP_K_HL_PER_SCENE"]
 
 
 def _resolve_frames_root() -> Path | None:
@@ -350,6 +353,17 @@ def _parse_float(value: Any) -> float | None:
     return float(result)
 
 
+def _parse_int(value: Any) -> int | None:
+    """Best-effort conversion of a value to ``int``."""
+
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 
 def _build_preview_url(path: str) -> str:
     """Convert an absolute preview path into an API URL."""
@@ -421,12 +435,12 @@ def _convert_scene_entry(
             break
 
     if isinstance(video_source, str) and video_source:
-        video_source = os.path.basename(video_source)
-        converted["video_source"] = video_source
-        video_url = _build_video_url(video_source)
-        # normalized_source = video_source.replace("\\", "/")
-        # converted["video_source"] = normalized_source
-        # video_url = _build_video_url(normalized_source)
+        # video_source = os.path.basename(video_source)
+        # converted["video_source"] = video_source
+        # video_url = _build_video_url(video_source)
+        normalized_source = video_source.replace("\\", "/")
+        converted["video_source"] = normalized_source
+        video_url = _build_video_url(normalized_source)
         converted["video_url"] = video_url
         converted.setdefault("video", video_url)
     else:
@@ -652,6 +666,41 @@ def _convert_scene_entry(
 
     return converted
 
+def _select_top_highlights(
+    highlights: List[Dict[str, Any]], limit: int | None
+) -> List[Dict[str, Any]]:
+    """Select the top highlights according to score and match count."""
+
+    if not isinstance(highlights, list):
+        return []
+    if limit is None or limit <= 0 or len(highlights) <= limit:
+        return [dict(h) if isinstance(h, dict) else h for h in highlights]
+
+    def _score(item: Dict[str, Any]) -> float:
+        for key in ("max_score", "max_det_score", "avg_similarity"):
+            value = _parse_float(item.get(key))
+            if value is not None:
+                return value
+        return 0.0
+
+    def _match_count(item: Dict[str, Any]) -> int:
+        value = _parse_int(item.get("match_count"))
+        return value if value is not None else 0
+
+    ranked = sorted(
+        (item for item in highlights if isinstance(item, dict)),
+        key=lambda item: (
+            -_score(item),
+            -_match_count(item),
+            _parse_float(item.get("start")) or float("inf"),
+        ),
+    )
+    top = ranked[:limit]
+    top.sort(key=lambda item: _parse_float(item.get("start")) or float("inf"))
+    return [dict(item) for item in top]
+
+
+
 
 def _expand_highlight_scenes(raw_scenes: Any) -> List[Dict[str, Any]]:
     """Flatten highlight intervals into cursorable scene entries."""
@@ -682,8 +731,10 @@ def _expand_highlight_scenes(raw_scenes: Any) -> List[Dict[str, Any]]:
         if source_scene_index is None:
             source_scene_index = source_index
 
+        ranked_highlights = _select_top_highlights(highlights, _HIGHLIGHT_LIMIT)
+
         valid_highlights: List[Dict[str, Any]] = []
-        for highlight in highlights:
+        for highlight in ranked_highlights:
             if not isinstance(highlight, dict):
                 continue
             start = _parse_float(highlight.get("start"))

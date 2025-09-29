@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from utils.config_loader import load_config
+from utils.config_loader import get_recognition_settings, load_config
 from utils.search_actor import search_actor
 
 
@@ -75,13 +75,14 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
 
     cfg = load_config()
     search_cfg = cfg.get("search", {})
+    recognition_cfg = get_recognition_settings(cfg)
     present_threshold = _as_float(
         search_cfg.get("present_threshold", search_cfg.get("threshold", 0.5)), 0.5
     )
-    near_match_threshold = _as_float(
-        search_cfg.get("near_match_threshold", 0.3), 0.3
+    near_match_threshold = _as_float(recognition_cfg.get("SIM_THRESHOLD"), 0.3)
+    min_score = _as_float(
+        search_cfg.get("min_score", near_match_threshold), near_match_threshold
     )
-    min_score = _as_float(search_cfg.get("min_score", near_match_threshold), near_match_threshold)
 
     max_results_cfg = _as_int(
         search_cfg.get("max_results", search_cfg.get("top_k", 50)), 50

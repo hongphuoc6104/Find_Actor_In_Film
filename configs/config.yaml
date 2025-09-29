@@ -99,3 +99,17 @@ search:
   max_results: 120             # số lượng hàng xóm tối đa lấy từ index để bao phủ tất cả kết quả >= min_score
   threshold: 0.45              # giữ lại cho tương thích cũ (ví dụ CLI)
   top_k: 5                     # tùy chọn cũ; được dùng làm fallback nếu max_results không thiết lập
+
+highlight:
+  MIN_HL_DURATION_SEC: 4.0
+  MERGE_GAP_SEC: 2.0
+  TOP_K_HL_PER_SCENE: 3
+  MIN_SCORE: 0.8
+
+recognition:
+  SIM_THRESHOLD: 0.3
+
+frontend:
+  SEEK_PAD_SEC: 0.0
+  PAUSE_TOLERANCE_SEC: 0.2
+  MIN_VIEWABLE_SEC: 0.35
