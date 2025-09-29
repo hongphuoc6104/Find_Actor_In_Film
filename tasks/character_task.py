@@ -154,7 +154,8 @@ def _summarise_detection(
     similarity: float | None,
     clusters: set[str],
     final_ids: set[str],
-) -> Dict[str, Any]:
+    min_duration: float | None = HIGHLIGHT_MIN_DURATION,
+) -> Dict[str, Any] | None:
     summary: Dict[str, Any] = {
         "timestamp": timestamp,
         "det_score": det_score,
@@ -210,7 +211,7 @@ def _finalise_highlight(
     if end_bound is not None:
         end = min(end, end_bound)
 
-    target_min_duration = _to_float(min_duration) if min_duration is not None else HIGHLIGHT_MIN_DURATION
+    target_min_duration = _to_float(min_duration) or 0.0
 
     duration = end - start
     if target_min_duration > 0 and duration < target_min_duration:
@@ -231,12 +232,17 @@ def _finalise_highlight(
         if deficit > 0:
             end += deficit
 
-            start = max(start, start_bound)
-            if end_bound is not None:
-                end = min(end, end_bound)
-
         if end < start:
             end = start
+
+        duration = end - start
+        if duration <= 0 and target_min_duration > 0:
+            proposed_end = start + target_min_duration
+            if end_bound is not None and proposed_end > end_bound:
+                start = max(start_bound, end_bound - target_min_duration)
+                end = max(start, end_bound)
+            else:
+                end = proposed_end
 
         duration = end - start
         if duration <= 0 and target_min_duration > 0:
