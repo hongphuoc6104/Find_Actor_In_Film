@@ -4,7 +4,7 @@ import axios from 'axios'
 import { API_BASE_URL } from '../config.js'
 import { toAbsoluteAssetUrl } from '../utils/assetUrls.js'
 const defaultInfoMessage = 'Tải ảnh khuôn mặt để bắt đầu tìm kiếm.'
-
+import { filterHighlights } from '../utils/highlights.js'
 const state = reactive({
   movies: [],
   resultMeta: null,
@@ -140,21 +140,18 @@ const ensureFrameMetadata = (entry) => {
       item && typeof item === 'object' ? ensureFrameMetadata(item) : item,
     )
   }
-
+  let normalisedHighlights = []
   if (Array.isArray(entry.highlights)) {
-    copy.highlights = entry.highlights.map((h) =>
-      h && typeof h === 'object' ? { ...h } : h,
-    )
+    normalisedHighlights = filterHighlights(entry.highlights)
   }
+  copy.highlights = normalisedHighlights
+  copy.highlight_total = normalisedHighlights.length
 
   if (entry.scene_index !== undefined) {
     copy.scene_index = normaliseNumber(entry.scene_index, null)
   }
   if (entry.highlight_index !== undefined) {
     copy.highlight_index = normaliseNumber(entry.highlight_index, null)
-  }
-  if (entry.highlight_total !== undefined) {
-    copy.highlight_total = normaliseNumber(entry.highlight_total, null)
   }
   if (entry.source_scene_index !== undefined) {
     copy.source_scene_index = normaliseNumber(entry.source_scene_index, null)
@@ -227,7 +224,6 @@ const resetSearch = () => {
 }
 
 const normaliseCharacter = (character) => {
-  const totalScenes = normaliseNumber(character?.total_scenes, null)
   const rawNextCursor =
     character?.next_scene_cursor ?? character?.scene_cursor ?? null
   const nextCursor =
@@ -250,6 +246,17 @@ const normaliseCharacter = (character) => {
     character?.scene && typeof character?.scene === 'object'
       ? ensureFrameMetadata(character.scene)
       : character?.scene ?? null
+
+  const highlightTotal =
+    sceneEntry && typeof sceneEntry.highlight_total === 'number'
+      ? sceneEntry.highlight_total
+      : null
+
+  const totalScenes =
+    highlightTotal !== null
+      ? highlightTotal
+      : normaliseNumber(character?.total_scenes, null)
+
 
   return {
     movie_id: String(character?.movie_id ?? ''),
@@ -278,6 +285,7 @@ const normaliseCharacter = (character) => {
         : null,
     next_scene_cursor: nextCursor,
     total_scenes: totalScenes,
+    highlight_total: highlightTotal ?? totalScenes ?? 0,
     has_more_scenes:
       character?.has_more_scenes ?? (nextCursor !== null && nextCursor !== undefined),
     verificationStatus: null,
@@ -331,6 +339,12 @@ const updateSceneEntry = (payload) => {
       ? ensureFrameMetadata(payload.scene)
       : payload?.scene ?? null
 
+  const sceneHighlightTotal =
+    sceneData && typeof sceneData.highlight_total === 'number'
+      ? sceneData.highlight_total
+      : null
+
+
   if (
     sceneData &&
     typeof sceneData === 'object' &&
@@ -353,8 +367,11 @@ const updateSceneEntry = (payload) => {
       payload.next_cursor !== undefined
         ? normaliseNumber(payload.next_cursor, null)
         : null,
+    highlight_total: sceneHighlightTotal ?? 0,
     total_scenes:
-      payload.total_scenes !== undefined
+      sceneHighlightTotal !== null
+        ? sceneHighlightTotal
+        : payload.total_scenes !== undefined
         ? normaliseNumber(payload.total_scenes, null)
         : null,
     has_more:
@@ -383,6 +400,7 @@ const updateSceneEntry = (payload) => {
   character.next_scene_cursor = entry.next_cursor
   character.total_scenes = entry.total_scenes
   character.has_more_scenes = entry.has_more
+  character.highlight_total = entry.highlight_total
 }
 
 const selectMovie = (movieId) => {

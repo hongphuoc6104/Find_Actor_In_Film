@@ -194,22 +194,7 @@
               </p>
             </div>
 
-            <footer class="face-search__actions">
-              <button type="button" class="confirm" @click="handleDecision('confirmed')" :disabled="!currentCharacter">
-                Đúng
-              </button>
-              <button type="button" class="reject" @click="handleDecision('rejected')" :disabled="!currentCharacter">
-                Không phải
-              </button>
-              <button
-                type="button"
-                class="secondary"
-                @click="loadAnotherScene"
-                :disabled="isSceneLoading || !canLoadAnotherScene"
-              >
-                Cảnh khác
-              </button>
-            </footer>
+
           </template>
           <p v-else class="face-search__placeholder">Chọn một phim để bắt đầu kiểm tra các cảnh.</p>
         </template>
@@ -272,16 +257,6 @@ const availableDetailTabs = computed(() => {
 
 const movieProgress = (movieId) => store.movieProgress(movieId)
 
-const canLoadAnotherScene = computed(() => {
-  const meta = currentSceneEntry.value
-  const character = currentCharacter.value
-  if (!meta && !character) {
-    return false
-  }
-  const nextCursor = meta?.next_cursor ?? character?.next_scene_cursor
-  return nextCursor !== null && nextCursor !== undefined
-})
-
 const cleanupPreview = () => {
   if (previewUrl.value) {
     URL.revokeObjectURL(previewUrl.value)
@@ -322,16 +297,6 @@ const handleSelectCharacter = (movieId, characterId) => {
   store.selectCharacter(movieId, characterId)
 }
 
-const loadAnotherScene = async () => {
-  await store.loadNextSceneForCurrent()
-}
-
-const handleDecision = async (status) => {
-  const advanced = store.applyDecision(status)
-  if (advanced) {
-    await ensureScene()
-  }
-}
 
 const ensureScene = async () => {
   const movieId = store.selectedMovieId.value
@@ -541,8 +506,7 @@ onBeforeUnmount(() => {
 }
 
 button[type='submit'],
-button.secondary,
-.face-search__actions button {
+button.secondary {
   border-radius: 999px;
   font-weight: 600;
   padding: 0.6rem 1.5rem;
@@ -566,32 +530,7 @@ button.secondary {
   color: #1f2937;
 }
 
-.face-search__actions button {
-  min-width: 128px;
-  border: 1px solid #cbd5f5;
-  background: #ffffff;
-  color: #1f2937;
-}
-
-.face-search__actions button.confirm {
-  background: #0ea5e9;
-  border-color: #0ea5e9;
-  color: #f8fafc;
-}
-
-.face-search__actions button.reject {
-  background: #f97316;
-  border-color: #f97316;
-  color: #fff7ed;
-}
-
-.face-search__actions button.secondary {
-  background: #e2e8f0;
-  border-color: #e2e8f0;
-}
-
-.face-search__form-actions button:not(:disabled):hover,
-.face-search__actions button:not(:disabled):hover {
+.face-search__form-actions button:not(:disabled):hover {
   filter: brightness(0.98);
 }
 
@@ -926,12 +865,6 @@ face-search__info dd {
   color: #334155;
 }
 
-face-search__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
 .face-search__placeholder,
 .face-search__no-results {
   margin: 0;
@@ -974,8 +907,6 @@ face-search__actions {
     border-radius: 0.75rem;
   }
 
-  .face-search__actions button {
-    flex: 1 1 45%;
-  }
+
 }
 </style>

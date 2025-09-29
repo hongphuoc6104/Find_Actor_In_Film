@@ -20,7 +20,14 @@ const toNumber = (value, fallback) => {
 export const SEEK_PAD_SEC = toNumber(resolveConfigValue('SEEK_PAD_SEC'), 0)
 export const PAUSE_TOLERANCE_SEC = toNumber(resolveConfigValue('PAUSE_TOLERANCE_SEC'), 0.2)
 export const MIN_VIEWABLE_SEC = toNumber(resolveConfigValue('MIN_VIEWABLE_SEC'), 0.35)
-
+export const HIGHLIGHT_SCORE_THRESHOLD = toNumber(
+  resolveConfigValue('HIGHLIGHT_SCORE_THRESHOLD'),
+  0.75,
+)
+export const HIGHLIGHT_MIN_DURATION_SEC = toNumber(
+  resolveConfigValue('MIN_HL_DURATION_SEC'),
+  4.0,
+)
 export const __test__ = {
   resolveConfigValue,
   toNumber,

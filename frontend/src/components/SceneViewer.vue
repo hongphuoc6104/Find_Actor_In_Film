@@ -2,8 +2,8 @@
   <section class="scene-viewer">
     <header class="scene-viewer__header">
       <div>
-        <h3>Cảnh hiện tại</h3>
-        <p v-if="sceneIndexLabel" class="scene-viewer__meta">{{ sceneIndexLabel }}</p>
+        <h3>Highlight nổi bật</h3>
+        <p v-if="highlightSummary" class="scene-viewer__meta">{{ highlightSummary }}</p>
       </div>
     </header>
 
@@ -49,13 +49,13 @@
         </section>
 
         <details v-if="timelineSegments.length" class="scene-viewer__panel scene-viewer__timeline" open>
-          <summary>Những khoảng có nhân vật xuất hiện (độ chính xác cao)</summary>
+          <summary>Những đoạn highlight có nhân vật xuất hiện nổi bật</summary>
           <ol>
             <li
               v-for="segment in timelineSegments"
-              :key="segment.id"
+              :key="segment.highlight.id"
               :class="['scene-viewer__timeline-item', { active: segment.active }]"
-              @click="seekToSegment(segment)"
+              @click="seekToSegment(segment.highlight)"
             >
               <div class="scene-viewer__timeline-header">
                 <span class="scene-viewer__timeline-index">{{ segment.order }}</span>
@@ -75,7 +75,8 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { toAbsoluteAssetUrl } from '../utils/assetUrls.js'
-import { MIN_VIEWABLE_SEC, PAUSE_TOLERANCE_SEC, SEEK_PAD_SEC } from '../utils/config.js'
+import { filterHighlights } from '../utils/highlights.js'
+import { PAUSE_TOLERANCE_SEC, SEEK_PAD_SEC } from '../utils/config.js'
 
 const props = defineProps({
   scene: { type: Object, default: null },
@@ -91,6 +92,10 @@ const videoRef = ref(null)
 const videoTime = ref(0)
 const pendingSeekTime = ref(null)
 const activeSegment = ref(null)
+const filteredHighlights = computed(() => {
+  if (!props.scene) return []
+  return filterHighlights(props.scene.highlights ?? [])
+})
 
 const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value)
 const isAfterSegment = (time, segment) => {
@@ -133,8 +138,8 @@ const sceneStartTime = computed(() => {
 
   if (!props.scene) return null
 
-  const highlightStart = Array.isArray(props.scene.highlights)
-    ? computeSegmentSeekStart(props.scene.highlights?.[0])
+  const highlightStart = filteredHighlights.value.length
+    ? computeSegmentSeekStart(filteredHighlights.value[0])
     : null
 
   const candidates = [
@@ -153,7 +158,7 @@ const sceneStartTime = computed(() => {
 /* --- Video state --- */
 const resetImageSize = () => { imageSize.width = 0; imageSize.height = 0 }
 const resetVideoState = () => {
-  activeSegment.value = null
+  activeSegment.value = filteredHighlights.value[0] ?? null
   videoSize.width = parseDimension(props.scene?.width)
   videoSize.height = parseDimension(props.scene?.height)
   const safeStart = sceneStartTime.value ?? 0
@@ -187,78 +192,66 @@ const sceneImage = computed(() => {
 
 watch(() => props.scene, () => { resetImageSize(); resetVideoState() })
 watch(() => sceneVideo.value, () => { resetVideoState() })
-
+watch(filteredHighlights, (segments) => {
+  if (!segments.length) {
+    activeSegment.value = null
+    return
+  }
+  if (!activeSegment.value) {
+    activeSegment.value = segments[0]
+    return
+  }
+  const existing = segments.find((segment) => segment.id === activeSegment.value.id)
+  activeSegment.value = existing ?? segments[0]
+})
 /* --- Timeline --- */
-function mergeTimelineEntries(entries, maxGap = 1.0) {
-  if (!entries.length) return []
-  const merged = []
-  let current = { start: entries[0].timestamp, end: entries[0].timestamp }
-  for (let i = 1; i < entries.length; i++) {
-    const ts = entries[i].timestamp
-    if (ts - current.end <= maxGap) {
-      current.end = ts
-    } else {
-      merged.push({ ...current })
-      current = { start: ts, end: ts }
-    }
-  }
-  merged.push({ ...current })
-  return merged
-}
-
-
 const timelineSegments = computed(() => {
-  if (!props.scene) return []
-
-  // Nếu API đã trả về highlights thì dùng luôn
-  if (Array.isArray(props.scene.highlights) && props.scene.highlights.length) {
-    return props.scene.highlights.map((h, i) => {
-      const format = (ts) => {
-        if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
-        const m = Math.floor(ts / 60), s = Math.floor(ts % 60)
-        return `${m}:${s.toString().padStart(2, '0')}`
-      }
-      return {
-        id: i,
-        order: i + 1,
-        label: `Cảnh ${i + 1} (score: ${(h.max_score * 100).toFixed(0)}%)`,
-        range: `${format(h.start)} → ${format(h.end)} (${h.duration.toFixed(1)}s)`,
-        start: h.start,
-        end: h.end,
-        active: isWithinSegmentWindow(videoTime.value, { start: h.start, end: h.end }),
-      }
-    })
+  const format = (ts) => {
+    if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
+    const m = Math.floor(ts / 60)
+    const s = Math.floor(ts % 60)
+    return `${m}:${s.toString().padStart(2, '0')}`
   }
 
+  const currentActiveId = activeSegment.value?.id ?? null
 
-  // Fallback: nếu chưa có highlights thì gộp từ timeline như trước
-  if (Array.isArray(props.scene.timeline)) {
-    const raw = props.scene.timeline
-      .filter(e => e && typeof e === 'object' && (e.det_score ?? 0) >= 0.9)
-    const merged = mergeTimelineEntries(raw, 1.0)
-    return merged.map((seg, i) => {
-      const format = (ts) => {
-        if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
-        const m = Math.floor(ts / 60), s = Math.floor(ts % 60)
-        return `${m}:${s.toString().padStart(2, '0')}`
-      }
-      return {
-        id: i,
-        order: i + 1,
-        label: `Khoảng #${i + 1}`,
-        range: `${format(seg.start)} → ${format(seg.end)}`,
-        start: seg.start,
-        end: seg.end,
-        active: isWithinSegmentWindow(videoTime.value, { start: seg.start, end: seg.end }),
-      }
-    })
-  }
+  return filteredHighlights.value.map((highlight) => {
+    const scoreValue = highlight.effective_score ?? highlight.score ?? 0
+    const labelScore = Number.isFinite(scoreValue)
+      ? `${Math.round(scoreValue * 100)}%`
+      : ''
+    const durationValue = Number.isFinite(highlight.duration)
+      ? `${highlight.duration.toFixed(1)}s`
+      : ''
+    const range =
+      highlight.start !== null && highlight.end !== null
+        ? `${format(highlight.start)} → ${format(highlight.end)}${
+            durationValue ? ` (${durationValue})` : ''
+          }`
+        : ''
 
-  return []
+    return {
+      order: highlight.order ?? 0,
+      label: labelScore ? `Highlight #${highlight.order} — ${labelScore}` : `Highlight #${highlight.order}`,
+      range,
+      start: highlight.start,
+      end: highlight.end,
+      highlight,
+      active:
+        currentActiveId !== null
+          ? currentActiveId === highlight.id
+          : isWithinSegmentWindow(videoTime.value, {
+              start: highlight.start,
+              end: highlight.end,
+            }),
+    }
+  })
 })
 
 
 const seekToSegment = (segment) => {
+  if (!segment) return
+
   const targetTime = computeSegmentSeekStart(segment)
   if (targetTime === null) return
 
@@ -282,25 +275,48 @@ const onVideoTimeUpdate = (e) => {
   const currentTime = video.currentTime ?? 0
   videoTime.value = currentTime
 
-  if (!activeSegment.value) return
-
-  const segment = activeSegment.value
-  if (!isFiniteNumber(segment.start) || !isFiniteNumber(segment.end)) {
-    activeSegment.value = null
+  const segments = filteredHighlights.value
+  if (!segments.length) {
     return
   }
 
-  const segmentDuration = segment.end - segment.start
-  const isShortSegment =
-    !isFiniteNumber(segmentDuration) || segmentDuration < (Number.isFinite(MIN_VIEWABLE_SEC) ? MIN_VIEWABLE_SEC : 0)
+  const currentSegment = segments.find((item) =>
+    isWithinSegmentWindow(currentTime, item),
+  )
+
+  if (currentSegment && (!activeSegment.value || activeSegment.value.id !== currentSegment.id)) {
+    activeSegment.value = currentSegment
+  }
+
+  const segment = activeSegment.value
+
+  if (!segment) {
+    return
+  }
+
+
+  if (!isFiniteNumber(segment.start) || !isFiniteNumber(segment.end)) {
+
+    return
+  }
+
+
   if (!isAfterSegment(currentTime, segment)) {
     return
   }
 
-  if (!isShortSegment) {
+  const nextSegment = (() => {
+    const index = segments.findIndex((item) => item.id === segment.id)
+    if (index === -1) return segments[0] ?? null
+    return segments[index + 1] ?? null
+  })()
+
+  if (nextSegment) {
+    seekToSegment(nextSegment)
+  } else {
     video.pause()
+    activeSegment.value = null
   }
-  activeSegment.value = null
 }
 
 const sceneDetails = computed(() => {
@@ -308,6 +324,10 @@ const sceneDetails = computed(() => {
   const details = []
   if (props.movieTitle) details.push({ label: 'Phim', value: props.movieTitle })
   if (props.characterId) details.push({ label: 'Nhân vật', value: props.characterId })
+  const highlightCount = filteredHighlights.value.length
+  if (highlightCount) {
+    details.push({ label: 'Highlight đạt chuẩn', value: highlightCount })
+  }
   return details
 })
 
@@ -332,12 +352,10 @@ const onVideoLoadedMetadata = (e) => {
   videoTime.value = video.currentTime ?? 0
 }
 
-const sceneIndexLabel = computed(() => {
-  if (!props.meta) return ''
-  const i = props.meta.scene_index, total = props.meta.total_scenes
-  if (typeof i === 'number' && typeof total === 'number') return `Cảnh ${i + 1}/${total}`
-  if (typeof i === 'number') return `Cảnh thứ ${i + 1}`
-  return ''
+const highlightSummary = computed(() => {
+  const count = filteredHighlights.value.length
+  if (count === 0) return 'Không có highlight đạt chuẩn'
+  return count === 1 ? '1 highlight đạt chuẩn' : `${count} highlight đạt chuẩn`
 })
 </script>
 
