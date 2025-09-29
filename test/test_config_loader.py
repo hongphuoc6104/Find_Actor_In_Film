@@ -12,7 +12,7 @@ def test_highlight_settings_defaults(monkeypatch):
     assert settings["MERGE_GAP_SEC"] == pytest.approx(2.0)
     assert settings["MIN_SCORE"] == pytest.approx(0.8)
     assert settings["TOP_K_HL_PER_SCENE"] is None
-
+    assert settings["SIM_THRESHOLD"] == pytest.approx(0.3)
 
 def test_highlight_settings_overrides():
     cfg = {
@@ -21,6 +21,7 @@ def test_highlight_settings_overrides():
             "MERGE_GAP_SEC": "1.2",
             "MIN_SCORE": "0.75",
             "TOP_K_HL_PER_SCENE": "5",
+            "SIM_THRESHOLD": "0.55",
         }
     }
 
@@ -30,7 +31,7 @@ def test_highlight_settings_overrides():
     assert settings["MERGE_GAP_SEC"] == pytest.approx(1.2)
     assert settings["MIN_SCORE"] == pytest.approx(0.75)
     assert settings["TOP_K_HL_PER_SCENE"] == 5
-
+    assert settings["SIM_THRESHOLD"] == pytest.approx(0.55)
 
 def test_recognition_threshold_prefers_specific_section():
     cfg = {

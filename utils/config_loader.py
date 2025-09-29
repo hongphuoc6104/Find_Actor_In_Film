@@ -70,6 +70,13 @@ def get_highlight_settings(config: Dict[str, Any] | None = None) -> Dict[str, An
     if "det_score_threshold" in highlight_cfg:
         min_score = _to_float(highlight_cfg.get("det_score_threshold"), min_score)
 
+    sim_threshold_value = highlight_cfg.get("SIM_THRESHOLD")
+    if sim_threshold_value is None:
+        recognition_cfg = config.get("recognition") if isinstance(config, dict) else None
+        if isinstance(recognition_cfg, dict):
+            sim_threshold_value = recognition_cfg.get("SIM_THRESHOLD")
+    sim_threshold = _to_float(sim_threshold_value, 0.3)
+
     top_k = _to_int(highlight_cfg.get("TOP_K_HL_PER_SCENE"), None)
     if "top_k_per_scene" in highlight_cfg and top_k is None:
         top_k = _to_int(highlight_cfg.get("top_k_per_scene"), None)
@@ -81,6 +88,7 @@ def get_highlight_settings(config: Dict[str, Any] | None = None) -> Dict[str, An
         "MERGE_GAP_SEC": merge_gap,
         "MIN_SCORE": min_score,
         "TOP_K_HL_PER_SCENE": top_k,
+        "SIM_THRESHOLD": sim_threshold,
     }
 
 

@@ -29,7 +29,7 @@ _HIGHLIGHT_SETTINGS = get_highlight_settings()
 
 DEFAULT_HIGHLIGHT_DET_SCORE = float(_HIGHLIGHT_SETTINGS["MIN_SCORE"])
 DEFAULT_HIGHLIGHT_GAP_SECONDS = float(_HIGHLIGHT_SETTINGS["MERGE_GAP_SEC"])
-DEFAULT_HIGHLIGHT_SIMILARITY = 0.35
+DEFAULT_HIGHLIGHT_SIMILARITY = float(_HIGHLIGHT_SETTINGS["SIM_THRESHOLD"])
 MAX_HIGHLIGHT_SAMPLES = 10
 
 HIGHLIGHT_MIN_DURATION = float(_HIGHLIGHT_SETTINGS["MIN_HL_DURATION_SEC"])  # tối thiểu 4s
@@ -37,6 +37,7 @@ HIGHLIGHT_MAX_DURATION = 60.0  # tối đa 60s
 HIGHLIGHT_EXTEND_SECONDS = 2.0  # mở rộng thêm 2s trước sau
 # Giới hạn số highlight trên mỗi cảnh (None nghĩa là không giới hạn)
 TOP_HIGHLIGHTS_PER_SCENE = _HIGHLIGHT_SETTINGS["TOP_K_HL_PER_SCENE"]
+HIGHLIGHT_MIN_SCORE = float(_HIGHLIGHT_SETTINGS["MIN_SCORE"])
 # HIGHLIGHT_MIN_CONFIDENCE = 0.85
 # HIGHLIGHT_MAX_GAP_SECONDS = 2.0
 # HIGHLIGHT_MAX_GAP_SECONDS = 2.0
@@ -69,6 +70,14 @@ def _parse_time(value: Any) -> float | None:
     if not np.isfinite(result):
         return None
     return float(result)
+
+
+def _extract_similarity(entry: Dict[str, Any]) -> float | None:
+    for key in ("actor_similarity", "similarity", "character_similarity"):
+        similarity = _to_float(entry.get(key))
+        if similarity is not None:
+            return similarity
+    return None
 
 
 
@@ -174,43 +183,39 @@ def _finalise_highlight(
     *,
     timeline_start: float | None = None,
     timeline_end: float | None = None,
-) -> Dict[str, Any]:
+    min_duration: float | None = None,
+) -> Dict[str, Any] | None:
     start_val = _parse_time(accumulator.get("start"))
     end_val = _parse_time(accumulator.get("end"))
 
-    if start_val is None:
-        start_val = float(accumulator["start"])
-    if end_val is None:
-        end_val = float(accumulator["end"])
+    if start_val is None or end_val is None:
+        return None
 
     start = float(start_val)
     end = float(end_val)
     if end < start:
-        end = start
+        start, end = end, start
 
     start_bound = _parse_time(timeline_start)
     if start_bound is None:
         start_bound = 0.0
     end_bound = _parse_time(timeline_end)
 
-    if HIGHLIGHT_EXTEND_SECONDS > 0:
-        start -= float(HIGHLIGHT_EXTEND_SECONDS)
-        end += float(HIGHLIGHT_EXTEND_SECONDS)
+    extend_seconds = float(HIGHLIGHT_EXTEND_SECONDS) if HIGHLIGHT_EXTEND_SECONDS else 0.0
+    if extend_seconds > 0:
+        start -= extend_seconds
+        end += extend_seconds
 
     start = max(start, start_bound)
     if end_bound is not None:
         end = min(end, end_bound)
-    if end < start:
-        end = start
 
-    min_duration = float(HIGHLIGHT_MIN_DURATION)
+    target_min_duration = _to_float(min_duration) if min_duration is not None else HIGHLIGHT_MIN_DURATION
+
     duration = end - start
-    if duration < min_duration:
-        deficit = min_duration - duration
-
-        available_before = start - start_bound
-        if available_before < 0:
-            available_before = 0.0
+    if target_min_duration > 0 and duration < target_min_duration:
+        deficit = target_min_duration - duration
+        available_before = max(start - start_bound, 0.0)
         available_after = float("inf")
         if end_bound is not None:
             available_after = max(end_bound - end, 0.0)
@@ -226,40 +231,86 @@ def _finalise_highlight(
         if deficit > 0:
             end += deficit
 
-        duration = end - start
+            start = max(start, start_bound)
+            if end_bound is not None:
+                end = min(end, end_bound)
 
-    max_duration = float(HIGHLIGHT_MAX_DURATION) if HIGHLIGHT_MAX_DURATION else None
-    if max_duration is not None and duration > max_duration:
-        excess = duration - max_duration
-        end -= excess
         if end < start:
             end = start
+
+        duration = end - start
+        if duration <= 0 and target_min_duration > 0:
+            proposed_end = start + target_min_duration
+            if end_bound is not None and proposed_end > end_bound:
+                start = max(start_bound, end_bound - target_min_duration)
+                end = max(start, end_bound)
+            else:
+                end = proposed_end
+
         duration = end - start
 
-    result = {
+        if duration <= 0:
+            return None
+
+        max_duration = _to_float(HIGHLIGHT_MAX_DURATION)
+        if max_duration and duration > max_duration:
+            end = start + max_duration
+            if end_bound is not None and end > end_bound:
+                end = end_bound
+                start = max(start, end - max_duration)
+        duration = end - start
+        if duration <= 0:
+            return None
+
+    det_scores: List[float] = list(accumulator.get("det_scores", []))
+    sim_values: List[float] = list(accumulator.get("similarities", []))
+    weight_sum = _to_float(accumulator.get("weight_sum")) or 0.0
+    weighted_similarity_sum = _to_float(accumulator.get("weighted_similarity_sum"))
+
+    score: float | None = None
+    if weighted_similarity_sum is not None and weight_sum > 0:
+        score = weighted_similarity_sum / weight_sum
+    elif sim_values:
+        score = sum(sim_values) / len(sim_values)
+
+    if score is None or not np.isfinite(score):
+        return None
+
+    highlight: Dict[str, Any] = {
         "start": round(start, 3),
         "end": round(end, 3),
-        "max_score": accumulator["max_det_score"],
-        "max_det_score": accumulator["max_det_score"],
-        "min_det_score": accumulator["min_det_score"],
-        "matched_cluster_ids": sorted(accumulator["matched_cluster_ids"]),
+        "duration": round(duration, 3),
+        "match_count": int(accumulator.get("match_count", 0)),
+        "supporting_detections": list(accumulator.get("supporting_detections", [])),
+        "matched_cluster_ids": sorted(accumulator.get("matched_cluster_ids", set())),
         "matched_final_character_ids": sorted(
-            accumulator["matched_final_character_ids"]
+            accumulator.get("matched_final_character_ids", set())
         ),
-        "supporting_detections": accumulator["supporting_detections"],
-        "match_count": int(accumulator["match_count"]),
+        "has_target": True,
     }
 
-    if accumulator["similarity_count"] > 0:
-        avg_sim = accumulator["similarity_sum"] / accumulator["similarity_count"]
-        result["avg_similarity"] = round(avg_sim, 6)
-        result["max_similarity"] = accumulator["max_similarity"]
-        result["min_similarity"] = accumulator["min_similarity"]
+    score = float(score)
+    highlight["score"] = round(score, 6)
+    highlight["max_score"] = round(score, 6)
 
-    if duration >= 0:
-        result["duration"] = round(duration, 3)
+    if det_scores:
+        highlight["max_det_score"] = max(det_scores)
+        highlight["min_det_score"] = min(det_scores)
 
-    return result
+    if sim_values:
+        avg_similarity = sum(sim_values) / len(sim_values)
+        highlight["avg_similarity"] = round(avg_similarity, 6)
+        highlight["max_similarity"] = max(sim_values)
+        highlight["min_similarity"] = min(sim_values)
+
+    if duration < HIGHLIGHT_MIN_DURATION:
+        end = start + HIGHLIGHT_MIN_DURATION
+        duration = end - start
+        # ghi lại vào highlight
+        highlight["end"] = round(end, 3)
+        highlight["duration"] = round(duration, 3)
+
+    return highlight
 
 
 def _make_highlight_matcher(
@@ -299,6 +350,88 @@ def _make_highlight_matcher(
 
     return _matcher
 
+def _segment_target_hits(
+    hits: List[Dict[str, Any]], merge_gap: float
+) -> List[List[Dict[str, Any]]]:
+    if not hits:
+        return []
+
+    gap_value = max(float(merge_gap), 0.0) if merge_gap is not None else 0.0
+    sorted_hits = sorted(hits, key=lambda item: item["timestamp"])
+
+    segments: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = []
+    last_ts: float | None = None
+
+    for hit in sorted_hits:
+        timestamp = float(hit["timestamp"])
+        if not current:
+            current = [hit]
+            last_ts = timestamp
+            continue
+
+        gap = timestamp - (last_ts if last_ts is not None else timestamp)
+        if gap <= gap_value:
+            current.append(hit)
+        else:
+            segments.append(current)
+            current = [hit]
+        last_ts = timestamp
+
+    if current:
+        segments.append(current)
+
+    return segments
+
+
+def _accumulate_segment_hits(segment_hits: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not segment_hits:
+        return {}
+
+    matched_clusters: set[str] = set()
+    matched_final_ids: set[str] = set()
+    det_scores: List[float] = []
+    similarities: List[float] = []
+    weight_sum = 0.0
+    weighted_similarity_sum = 0.0
+    supporting: List[Dict[str, Any]] = []
+
+    for hit in segment_hits:
+        matched_clusters.update(hit.get("clusters", set()))
+        matched_final_ids.update(hit.get("final_ids", set()))
+
+        det_score = hit.get("det_score")
+        if det_score is not None:
+            det_scores.append(float(det_score))
+
+        similarity = hit.get("similarity")
+        if similarity is not None:
+            similarities.append(float(similarity))
+            weight = float(det_score) if det_score is not None else 1.0
+            weight_sum += weight
+            weighted_similarity_sum += float(similarity) * weight
+
+        detection_summary = hit.get("summary")
+        if (
+            isinstance(detection_summary, dict)
+            and len(supporting) < MAX_HIGHLIGHT_SAMPLES
+        ):
+            supporting.append(detection_summary)
+
+    return {
+        "start": float(segment_hits[0]["timestamp"]),
+        "end": float(segment_hits[-1]["timestamp"]),
+        "det_scores": det_scores,
+        "similarities": similarities,
+        "weight_sum": weight_sum,
+        "weighted_similarity_sum": weighted_similarity_sum,
+        "matched_cluster_ids": matched_clusters,
+        "matched_final_character_ids": matched_final_ids,
+        "supporting_detections": supporting,
+        "match_count": len(segment_hits),
+    }
+
+
 
 def _build_highlights(
     entries: List[Dict[str, Any]],
@@ -306,38 +439,59 @@ def _build_highlights(
     det_th: float = DEFAULT_HIGHLIGHT_DET_SCORE,
     max_gap: float = DEFAULT_HIGHLIGHT_GAP_SECONDS,
     match_fn: Any | None = None,
+    sim_threshold: float | None = DEFAULT_HIGHLIGHT_SIMILARITY,
+    min_duration: float = HIGHLIGHT_MIN_DURATION,
+    min_score: float | None = HIGHLIGHT_MIN_SCORE,
 ) -> List[Dict[str, Any]]:
     timeline_start: float | None = None
     timeline_end: float | None = None
-    for timeline_entry in entries:
-        ts = _parse_time(timeline_entry.get("timestamp"))
-        if ts is None:
-            continue
-        if timeline_start is None or ts < timeline_start:
-            timeline_start = ts
-        if timeline_end is None or ts > timeline_end:
-            timeline_end = ts
+    hits: List[Dict[str, Any]] = []
 
-    highlights: List[Dict[str, Any]] = []
-    current: Dict[str, Any] | None = None
-
+    # duyệt từng entry để chọn "hit"
     for entry in entries:
         timestamp = _parse_time(entry.get("timestamp"))
         if timestamp is None:
             continue
+        if timeline_start is None or timestamp < timeline_start:
+            timeline_start = timestamp
+        if timeline_end is None or timestamp > timeline_end:
+            timeline_end = timestamp
+
+        # if match_fn is not None and not match_fn(entry):
+        #     continue
+
+        # det_score = _to_float(entry.get("det_score"))
+        # if det_th is not None and (det_score is None or det_score < det_th):
+        #     # chỉ bỏ nếu KHÔNG có match_fn positive
+        #     if not (match_fn and match_fn(entry)):
+        #         continue
+        #
+        # similarity = _extract_similarity(entry)
+        # # Nếu không có match_fn thì mới lọc theo similarity threshold
+        # if match_fn is None:
+        #     if sim_threshold is not None:
+        #         if similarity is None or similarity < sim_threshold:
+        #             continue
+        #     elif similarity is None:
+        #         continue
 
         det_score = _to_float(entry.get("det_score"))
-        if det_score is None or det_score < det_th:
+        if det_th is not None and (det_score is None or det_score < det_th):
             continue
 
-        if match_fn is not None and not match_fn(entry):
+        similarity = _extract_similarity(entry)
+
+        # 🔑 logic mới: phải match_fn hoặc similarity đủ
+        ok = False
+        if match_fn is not None and match_fn(entry):
+            ok = True
+        elif sim_threshold is not None and similarity is not None and similarity >= sim_threshold:
+            ok = True
+
+        if not ok:
             continue
 
-        similarity: float | None = None
-        for key in ("actor_similarity", "similarity", "character_similarity"):
-            similarity = _to_float(entry.get(key))
-            if similarity is not None:
-                break
+
 
         clusters = _coerce_str_set(entry.get("cluster_id"))
         clusters.update(_coerce_str_set(entry.get("cluster_ids")))
@@ -347,76 +501,53 @@ def _build_highlights(
         detection_summary = _summarise_detection(
             entry,
             timestamp,
-            det_score,
+            det_score if det_score is not None else 0.0,
             similarity,
             clusters,
             final_ids,
         )
 
-        if current is None:
-            current = {
-                "start": timestamp,
-                "end": timestamp,
-                "max_det_score": det_score,
-                "min_det_score": det_score,
-                "max_similarity": similarity if similarity is not None else None,
-                "min_similarity": similarity if similarity is not None else None,
-                "similarity_sum": similarity if similarity is not None else 0.0,
-                "similarity_count": 1 if similarity is not None else 0,
-                "matched_cluster_ids": set(clusters),
-                "matched_final_character_ids": set(final_ids),
-                "supporting_detections": [detection_summary],
-                "match_count": 1,
+        hits.append(
+            {
+                "timestamp": float(timestamp),
+                "det_score": det_score,
+                "similarity": similarity,
+                "clusters": clusters,
+                "final_ids": final_ids,
+                "summary": detection_summary,
             }
+        )
+
+    # 🔑 xử lý sau khi gom đủ hits
+    if not hits:
+        return []
+
+    merge_gap = _to_float(max_gap) or 0.0
+    segments = _segment_target_hits(hits, merge_gap)
+
+    highlights: List[Dict[str, Any]] = []
+    for segment_hits in segments:
+        accumulator = _accumulate_segment_hits(segment_hits)
+        if not accumulator:
             continue
 
-        gap = timestamp - current["end"]
-        if gap <= max_gap:
-            current["end"] = timestamp
-            current["max_det_score"] = max(current["max_det_score"], det_score)
-            current["min_det_score"] = min(current["min_det_score"], det_score)
-            current["match_count"] += 1
-            if similarity is not None:
-                if current["max_similarity"] is None or similarity > current["max_similarity"]:
-                    current["max_similarity"] = similarity
-                if current["min_similarity"] is None or similarity < current["min_similarity"]:
-                    current["min_similarity"] = similarity
-                current["similarity_sum"] += similarity
-                current["similarity_count"] += 1
-            current["matched_cluster_ids"].update(clusters)
-            current["matched_final_character_ids"].update(final_ids)
-            if len(current["supporting_detections"]) < MAX_HIGHLIGHT_SAMPLES:
-                current["supporting_detections"].append(detection_summary)
+        highlight = _finalise_highlight(
+            accumulator,
+            timeline_start=timeline_start,
+            timeline_end=timeline_end,
+            min_duration=min_duration,
+        )
+        if not highlight:
             continue
 
-        highlights.append(
-            _finalise_highlight(
-                current, timeline_start=timeline_start, timeline_end=timeline_end
-            )
-        )
-        current = {
-            "start": timestamp,
-            "end": timestamp,
-            "max_det_score": det_score,
-            "min_det_score": det_score,
-            "max_similarity": similarity if similarity is not None else None,
-            "min_similarity": similarity if similarity is not None else None,
-            "similarity_sum": similarity if similarity is not None else 0.0,
-            "similarity_count": 1 if similarity is not None else 0,
-            "matched_cluster_ids": set(clusters),
-            "matched_final_character_ids": set(final_ids),
-            "supporting_detections": [detection_summary],
-            "match_count": 1,
-        }
+        score_value = _to_float(highlight.get("score"))
+        if min_score is not None and score_value is not None and score_value < min_score:
+            continue
 
-    if current is not None:
-        highlights.append(
-            _finalise_highlight(
-                current, timeline_start=timeline_start, timeline_end=timeline_end
-            )
-        )
+        highlights.append(highlight)
 
     return highlights
+
 
 
 def _limit_highlights_per_scene(
@@ -1339,6 +1470,13 @@ def character_task():
                             det_th=float(highlight_det_threshold),
                             max_gap=float(highlight_gap_seconds),
                             match_fn=highlight_matcher,
+                            sim_threshold=(
+                                float(highlight_similarity_threshold)
+                                if highlight_similarity_threshold is not None
+                                else DEFAULT_HIGHLIGHT_SIMILARITY
+                            ),
+                            min_duration=HIGHLIGHT_MIN_DURATION,
+                            min_score=HIGHLIGHT_MIN_SCORE,
                         )
                         highlights = _limit_highlights_per_scene(
                             highlights, TOP_HIGHLIGHTS_PER_SCENE
