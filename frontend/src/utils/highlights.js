@@ -1,7 +1,8 @@
 import { toAbsoluteAssetUrl } from './assetUrls.js'
 import {
-  HIGHLIGHT_MIN_DURATION_SEC,
-  HIGHLIGHT_SCORE_THRESHOLD,
+  DEFAULT_HIGHLIGHT_MIN_DURATION_SEC,
+  DEFAULT_HIGHLIGHT_SCORE_THRESHOLD,
+  resolveHighlightThresholds,
 } from './config.js'
 
 const toFiniteNumber = (value) => {
@@ -81,7 +82,7 @@ const convertAssetFields = (highlight) => {
   }
 }
 
-export const normaliseHighlight = (rawHighlight, fallbackIndex = 0) => {
+export const normaliseHighlight = (rawHighlight, fallbackIndex = 0, thresholds = {}) => {
   if (!rawHighlight || typeof rawHighlight !== 'object') {
     return null
   }
@@ -93,7 +94,10 @@ export const normaliseHighlight = (rawHighlight, fallbackIndex = 0) => {
   }
 
   const duration = normaliseDuration(rawHighlight, start, end)
-  if (duration === null || duration < HIGHLIGHT_MIN_DURATION_SEC) {
+  const minDuration = Number.isFinite(thresholds.minDuration)
+    ? thresholds.minDuration
+    : DEFAULT_HIGHLIGHT_MIN_DURATION_SEC
+  if (duration === null || duration < minDuration) {
     return null
   }
 
@@ -111,8 +115,11 @@ export const normaliseHighlight = (rawHighlight, fallbackIndex = 0) => {
 
   const candidates = resolveScoreCandidates(rawHighlight)
   const bestScore = candidates.length ? Math.max(...candidates) : null
-  const meetsScore = bestScore !== null && bestScore >= HIGHLIGHT_SCORE_THRESHOLD
-  const meetsActor = actorSimilarity !== null && actorSimilarity >= HIGHLIGHT_SCORE_THRESHOLD
+  const minScore = Number.isFinite(thresholds.minScore)
+    ? thresholds.minScore
+    : DEFAULT_HIGHLIGHT_SCORE_THRESHOLD
+  const meetsScore = bestScore !== null && bestScore >= minScore
+  const meetsActor = actorSimilarity !== null && actorSimilarity >= minScore
 
   if (!meetsScore && !meetsActor) {
     return null
@@ -144,14 +151,24 @@ export const normaliseHighlight = (rawHighlight, fallbackIndex = 0) => {
   return highlight
 }
 
-export const filterHighlights = (highlights) => {
+export const filterHighlights = (highlights, options = {}) => {
   if (!Array.isArray(highlights)) {
     return []
   }
 
+  const cachedMeta =
+    highlights && typeof highlights === 'object' ? highlights.__highlightFilterMeta : null
+
+  const thresholdSources = [options, options?.support, options?.settings]
+  if (cachedMeta) {
+    thresholdSources.push(cachedMeta)
+  }
+
+  const thresholds = resolveHighlightThresholds(thresholdSources)
+
   const normalised = []
   highlights.forEach((item, index) => {
-    const highlight = normaliseHighlight(item, index)
+    const highlight = normaliseHighlight(item, index, thresholds)
     if (highlight) {
       normalised.push(highlight)
     }
@@ -169,10 +186,25 @@ export const filterHighlights = (highlights) => {
     return (a.start ?? 0) - (b.start ?? 0)
   })
 
-  return normalised.map((highlight, index) => ({
+  const sorted = normalised.map((highlight, index) => ({
     ...highlight,
     order: index + 1,
   }))
+
+  const meta = {
+    minScore: thresholds.minScore,
+    minDuration: thresholds.minDuration,
+  }
+
+  try {
+    Object.defineProperty(sorted, '__highlightFilterMeta', {
+      value: meta,
+      enumerable: false,
+      configurable: true,
+    })
+  } catch {}
+
+  return sorted
 }
 
 export const __test__ = {

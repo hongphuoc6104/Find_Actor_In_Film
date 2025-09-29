@@ -142,10 +142,22 @@ const ensureFrameMetadata = (entry) => {
   }
   let normalisedHighlights = []
   if (Array.isArray(entry.highlights)) {
-    normalisedHighlights = filterHighlights(entry.highlights)
+    const highlightOptions = {
+      support: entry?.highlight_support,
+      settings: entry?.highlight_settings,
+    }
+    normalisedHighlights = filterHighlights(entry.highlights, highlightOptions)
   }
   copy.highlights = normalisedHighlights
-  copy.highlight_total = normalisedHighlights.length
+
+  const highlightTotalValue =
+    entry?.highlight_total !== undefined
+      ? normaliseNumber(entry.highlight_total, null)
+      : null
+
+  copy.highlight_total =
+    highlightTotalValue !== null ? highlightTotalValue : normalisedHighlights.length
+  copy.highlight_display_count = normalisedHighlights.length
 
   if (entry.scene_index !== undefined) {
     copy.scene_index = normaliseNumber(entry.scene_index, null)
@@ -252,6 +264,13 @@ const normaliseCharacter = (character) => {
       ? sceneEntry.highlight_total
       : null
 
+  const highlightDisplayCount =
+    sceneEntry && typeof sceneEntry.highlight_display_count === 'number'
+      ? sceneEntry.highlight_display_count
+      : Array.isArray(sceneEntry?.highlights)
+      ? sceneEntry.highlights.length
+      : 0
+
   const totalScenes =
     highlightTotal !== null
       ? highlightTotal
@@ -286,6 +305,7 @@ const normaliseCharacter = (character) => {
     next_scene_cursor: nextCursor,
     total_scenes: totalScenes,
     highlight_total: highlightTotal ?? totalScenes ?? 0,
+    highlight_display_count: highlightDisplayCount,
     has_more_scenes:
       character?.has_more_scenes ?? (nextCursor !== null && nextCursor !== undefined),
     verificationStatus: null,
@@ -343,6 +363,14 @@ const updateSceneEntry = (payload) => {
     sceneData && typeof sceneData.highlight_total === 'number'
       ? sceneData.highlight_total
       : null
+
+
+  const sceneHighlightDisplayCount =
+    sceneData && typeof sceneData.highlight_display_count === 'number'
+      ? sceneData.highlight_display_count
+      : Array.isArray(sceneData?.highlights)
+      ? sceneData.highlights.length
+      : 0
 
 
   if (

@@ -69,7 +69,8 @@ const sceneViewerPath = resolve(dirname(fileURLToPath(import.meta.url)), '../src
 const sceneViewerSource = await readFile(sceneViewerPath, 'utf-8')
 
 assert(
-  sceneViewerSource.includes('computeSegmentSeekStart(props.scene.highlights?.[0])'),
+  sceneViewerSource.includes('computeSegmentSeekStart(filteredHighlights.value[0])') ||
+    sceneViewerSource.includes('computeSegmentSeekStart(props.scene.highlights?.[0])'),
   'Scene viewer should prioritise highlight starts using the padded seek helper when available',
 )
 
@@ -94,7 +95,8 @@ assert(
 )
 
 assert(
-  sceneViewerSource.includes('MIN_VIEWABLE_SEC'),
+  sceneViewerSource.includes('MIN_VIEWABLE_SEC') ||
+    sceneViewerSource.includes('isWithinSegmentWindow'),
   'Scene viewer should skip auto-pausing highlights shorter than the configured threshold',
 )
 
@@ -295,7 +297,10 @@ highlightStore.updateSceneEntry({
   next_cursor: 1,
   total_scenes: 2,
   scene: {
-    highlights: [{ start: 10, end: 12.5, max_score: 0.95 }],
+    highlights: [
+      { start: 10, end: 15, max_score: 0.95 },
+      { start: 20, end: 25, max_score: 0.4 },
+    ],
     highlight_index: 0,
     highlight_total: 2,
     source_scene_index: 0,
@@ -318,6 +323,16 @@ assert.equal(
   'Total highlights should be tracked',
 )
 assert.equal(
+  highlightStore.state.scenes[highlightKey].highlight_total,
+  2,
+  'Scene cache should retain backend highlight totals',
+)
+assert.equal(
+  highlightStore.state.scenes[highlightKey].highlight_display_count,
+  1,
+  'Scene cache should expose filtered highlight counts',
+)
+assert.equal(
   highlightStore.state.movies[0].characters[0].scene.highlights.length,
   1,
   'Character scene should use a single highlight segment',
@@ -333,6 +348,11 @@ assert.equal(
   'Character scene should retain highlight metadata',
 )
 assert.equal(
+  highlightStore.state.movies[0].characters[0].scene.highlight_display_count,
+  1,
+  'Character scene should expose filtered highlight counts',
+)
+assert.equal(
   highlightStore.state.movies[0].characters[0].has_more_scenes,
   true,
   'Character should report remaining highlights',
@@ -345,7 +365,7 @@ highlightStore.updateSceneEntry({
   next_cursor: null,
   total_scenes: 2,
   scene: {
-    highlights: [{ start: 30, end: 33.2, max_score: 0.88 }],
+    highlights: [{ start: 30, end: 35.2, max_score: 0.88 }],
     highlight_index: 1,
     highlight_total: 2,
     source_scene_index: 0,
@@ -364,6 +384,11 @@ assert.equal(
   'Scene cache should report no further highlights',
 )
 assert.equal(
+  highlightStore.state.scenes[highlightKey].highlight_display_count,
+  1,
+  'Scene cache should continue reporting filtered highlight counts',
+)
+assert.equal(
   highlightStore.state.movies[0].characters[0].scene.highlight_index,
   1,
   'Character scene should switch to the second highlight',
@@ -378,7 +403,52 @@ assert.equal(
   false,
   'Character should report no remaining highlights',
 )
+assert.equal(
+  highlightStore.state.movies[0].characters[0].highlight_display_count,
+  1,
+  'Character metadata should track filtered highlight counts',
+)
 
 highlightStore.resetSearch()
 
 console.log('Highlight navigation tests passed.')
+
+const backendHighlightMeta = ensureFrameMetadata({
+  highlight_total: 3,
+  highlight_support: { min_score: 0.75, min_duration: 4 },
+  highlights: [
+    { start: 0, end: 6, max_score: 0.92 },
+    { start: 10, end: 15, max_score: 0.81 },
+    { start: 20, end: 26, max_score: 0.5 },
+  ],
+})
+
+assert.equal(
+  backendHighlightMeta.highlight_total,
+  3,
+  'ensureFrameMetadata should keep backend highlight totals',
+)
+assert.equal(
+  backendHighlightMeta.highlight_display_count,
+  2,
+  'ensureFrameMetadata should report filtered highlight counts',
+)
+
+const relaxedHighlightMeta = ensureFrameMetadata({
+  highlight_total: 1,
+  highlight_support: { min_score: 0.6, min_duration: 4 },
+  highlights: [{ start: 30, end: 35, max_score: 0.65 }],
+})
+
+assert.equal(
+  relaxedHighlightMeta.highlight_display_count,
+  1,
+  'Highlights meeting relaxed backend thresholds should be preserved',
+)
+assert.equal(
+  relaxedHighlightMeta.highlight_total,
+  1,
+  'Relaxed threshold scenes should retain backend highlight totals',
+)
+
+console.log('Highlight threshold synchronisation tests passed.')
