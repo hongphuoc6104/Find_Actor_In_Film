@@ -60,7 +60,8 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
     clip_file.write_bytes(b"clip-bytes")
 
     video_rel = os.path.join(movie_folder, "movie.mp4")
-    video_file = videos_root / video_rel
+    video_basename = os.path.basename(video_rel)
+    video_file = videos_root / video_basename
     video_file.parent.mkdir(parents=True, exist_ok=True)
     video_file.write_bytes(b"video-bytes")
 
@@ -138,8 +139,9 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             assert scene["frame"].startswith(main.FRAMES_ROUTE)
             assert scene.get("frame_url", "").startswith(main.FRAMES_ROUTE)
             assert scene.get("frame_name") == frame_name
-            assert scene.get("video_url", "").startswith(main.VIDEOS_ROUTE)
-            assert scene.get("video_source") == video_rel.replace(os.sep, "/")
+            expected_video_url = f"{main.VIDEOS_ROUTE}/{video_basename}"
+            assert scene.get("video_url") == expected_video_url
+            assert scene.get("video_source") == expected_video_url
             assert scene.get("start_time") == 12.5
             assert scene.get("duration") == 5.0
             assert scene.get("width") == 640
@@ -162,6 +164,88 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             assert image_response.content
     finally:
         main._clear_character_cache()
+
+
+def test_scene_endpoint_normalises_windows_video_source(tmp_path, monkeypatch):
+    frames_root = tmp_path / "frames"
+    previews_root = tmp_path / "previews"
+    characters_path = tmp_path / "characters.json"
+    videos_root = tmp_path / "videos"
+
+    movie_key = "movie1"
+    character_key = "char1"
+    movie_folder = "MOVIE_FOLDER"
+    frame_name = "frame_0001.jpg"
+    windows_video_path = "nested\\folder\\movie.mp4"
+    video_basename = os.path.basename(windows_video_path.replace("\\", "/"))
+
+    (frames_root / movie_folder).mkdir(parents=True, exist_ok=True)
+    (frames_root / movie_folder / frame_name).write_bytes(b"frame")
+
+    video_file = videos_root / video_basename
+    video_file.parent.mkdir(parents=True, exist_ok=True)
+    video_file.write_bytes(b"video-bytes")
+
+    characters = {
+        movie_key: {
+            character_key: {
+                "movie": movie_folder,
+                "scenes": [
+                    {
+                        "frame": frame_name,
+                        "video_source": windows_video_path,
+                        "timestamp": 5.0,
+                        "highlights": [
+                            {"start": 5.0, "end": 6.0, "max_score": 0.9},
+                        ],
+                    }
+                ],
+            }
+        }
+    }
+    characters_path.write_text(json.dumps(characters), encoding="utf-8")
+
+    config = {
+        "storage": {
+            "frames_root": str(frames_root),
+            "cluster_previews_root": str(previews_root),
+            "video_root": str(videos_root),
+            "characters_json": str(characters_path),
+        }
+    }
+
+    monkeypatch.setattr("utils.config_loader.load_config", lambda: config)
+    _stub_insightface(monkeypatch)
+    sys.modules.pop("api.main", None)
+    main = importlib.import_module("api.main")
+
+    try:
+        with TestClient(main.app) as client:
+            response = client.post(
+                "/scene",
+                json={
+                    "movie_id": movie_key,
+                    "character_id": character_key,
+                    "cursor": 0,
+                },
+            )
+            assert response.status_code == 200
+            payload = response.json()
+
+            scene = payload["scene"]
+            expected_video_url = f"{main.VIDEOS_ROUTE}/{video_basename}"
+            assert scene.get("video_url") == expected_video_url
+            assert scene.get("video_source") == expected_video_url
+
+            good_response = client.get(scene["video_url"])
+            assert good_response.status_code == 200
+
+            nested_path = windows_video_path.replace("\\", "/")
+            bad_response = client.get(f"{main.VIDEOS_ROUTE}/{nested_path}")
+            assert bad_response.status_code == 404
+    finally:
+        main._clear_character_cache()
+
 
 def test_scene_endpoint_flattens_highlights(tmp_path, monkeypatch):
     frames_root = tmp_path / "frames"

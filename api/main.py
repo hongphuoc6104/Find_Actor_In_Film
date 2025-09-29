@@ -438,9 +438,19 @@ def _convert_scene_entry(
         # video_source = os.path.basename(video_source)
         # converted["video_source"] = video_source
         # video_url = _build_video_url(video_source)
-        normalized_source = video_source.replace("\\", "/")
-        converted["video_source"] = normalized_source
-        video_url = _build_video_url(normalized_source)
+        raw_video_source = video_source
+        normalized_source = raw_video_source.replace("\\", "/")
+        served_name = os.path.basename(normalized_source)
+        if not served_name:
+            served_name = normalized_source
+        if normalized_source != served_name:
+            logger.debug(
+                "Normalising video source '%s' to basename '%s'",
+                raw_video_source,
+                served_name,
+            )
+        video_url = _build_video_url(served_name)
+        converted["video_source"] = video_url
         converted["video_url"] = video_url
         converted.setdefault("video", video_url)
     else:
