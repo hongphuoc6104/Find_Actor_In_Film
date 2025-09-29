@@ -361,6 +361,75 @@ def test_scene_endpoint_flattens_highlights(tmp_path, monkeypatch):
     finally:
         main._clear_character_cache()
 
+def test_scene_endpoint_falls_back_when_no_highlights(tmp_path, monkeypatch):
+    frames_root = tmp_path / "frames"
+    previews_root = tmp_path / "previews"
+    characters_path = tmp_path / "characters.json"
+
+    movie_key = "movie1"
+    character_key = "char1"
+    movie_folder = "MOVIE_FOLDER"
+    frame_name = "frame_0001.jpg"
+
+    (frames_root / movie_folder).mkdir(parents=True, exist_ok=True)
+    (frames_root / movie_folder / frame_name).write_bytes(b"frame")
+
+    characters = {
+        movie_key: {
+            character_key: {
+                "movie": movie_folder,
+                "scene": {"frame": frame_name, "bbox": [0, 0, 20, 40]},
+                "scenes": [
+                    {"frame": frame_name, "bbox": [0, 0, 20, 40]},
+                ],
+            }
+        }
+    }
+
+    characters_path.write_text(json.dumps(characters), encoding="utf-8")
+
+    config = {
+        "storage": {
+            "frames_root": str(frames_root),
+            "cluster_previews_root": str(previews_root),
+            "characters_json": str(characters_path),
+        }
+    }
+
+    monkeypatch.setattr("utils.config_loader.load_config", lambda: config)
+    _stub_insightface(monkeypatch)
+    sys.modules.pop("api.main", None)
+    main = importlib.import_module("api.main")
+
+    try:
+        with TestClient(main.app) as client:
+            response = client.post(
+                "/scene",
+                json={
+                    "movie_id": movie_key,
+                    "character_id": character_key,
+                    "cursor": 0,
+                },
+            )
+
+            assert response.status_code == 200
+            payload = response.json()
+
+            assert payload["scene_index"] == 0
+            assert payload["next_cursor"] is None
+            assert payload["has_more"] is False
+            assert payload["total_scenes"] == 1
+
+            scene = payload["scene"]
+            assert scene["scene_index"] == 0
+            assert scene.get("highlight_total") == 0
+            assert scene.get("highlights") == []
+            assert scene.get("source_scene_index") == 0
+            assert scene["frame"].startswith(main.FRAMES_ROUTE)
+            assert scene["frame_url"].startswith(main.FRAMES_ROUTE)
+    finally:
+        main._clear_character_cache()
+
 
 
 def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):

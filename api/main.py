@@ -772,7 +772,11 @@ def _expand_highlight_scenes(raw_scenes: Any) -> List[Dict[str, Any]]:
             highlight_start = highlight.get("start")
             highlight_end = highlight.get("end")
             highlight_duration = _parse_float(highlight.get("duration"))
-            if highlight_duration is None and isinstance(highlight_start, (int, float)) and isinstance(highlight_end, (int, float)):
+            if (
+                highlight_duration is None
+                and isinstance(highlight_start, (int, float))
+                and isinstance(highlight_end, (int, float))
+            ):
                 highlight_duration = max(highlight_end - highlight_start, 0.0)
                 highlight["duration"] = highlight_duration
             if isinstance(highlight_start, (int, float)):
@@ -789,6 +793,51 @@ def _expand_highlight_scenes(raw_scenes: Any) -> List[Dict[str, Any]]:
             expanded.append(scene_copy)
 
     return expanded
+
+def _build_scene_entries(character: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return a list of scene entries, falling back when highlights are absent."""
+
+    raw_scenes = character.get("scenes")
+    expanded = _expand_highlight_scenes(raw_scenes)
+    if expanded:
+        return expanded
+
+    def _coerce_scene(value: Any) -> Dict[str, Any] | None:
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, str) and value:
+            return {"frame": value}
+        return None
+
+    def _normalise_scene(scene: Dict[str, Any], fallback_index: int) -> Dict[str, Any]:
+        scene_copy = dict(scene)
+        raw_index = scene_copy.get("scene_index")
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            index = fallback_index
+        scene_copy.setdefault("scene_index", index)
+        scene_copy.setdefault("source_scene_index", index)
+        scene_copy.setdefault("highlights", [])
+        scene_copy.setdefault("highlight_total", 0)
+        scene_copy.setdefault("highlight_index", None)
+        return scene_copy
+
+    fallback: List[Dict[str, Any]] = []
+    if isinstance(raw_scenes, list):
+        for idx, raw_scene in enumerate(raw_scenes):
+            scene_dict = _coerce_scene(raw_scene)
+            if not scene_dict:
+                continue
+            fallback.append(_normalise_scene(scene_dict, idx))
+
+    if not fallback:
+        single_scene = _coerce_scene(character.get("scene"))
+        if single_scene:
+            fallback.append(_normalise_scene(single_scene, 0))
+
+    return fallback
+
 
 
 def _convert_preview_entry(
@@ -963,11 +1012,9 @@ async def scene_endpoint(request: SceneRequest) -> Dict[str, Any]:
     # if not isinstance(scenes, list) or not scenes:
     #     raise HTTPException(status_code=404, detail="No scenes available")
 
-    expanded_scenes = _expand_highlight_scenes(character.get("scenes"))
+    expanded_scenes = _build_scene_entries(character)
     if not expanded_scenes:
-        raise HTTPException(
-            status_code=404, detail="No highlighted scenes available"
-        )
+        raise HTTPException(status_code=404, detail="No scenes available")
 
 
 
