@@ -4,9 +4,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from utils.config_loader import get_recognition_settings, load_config
+from utils.config_loader import (
+    get_highlight_settings,
+    get_recognition_settings,
+    load_config,
+)
 from utils.search_actor import search_actor
+from utils.highlights import expand_highlight_scenes
 
+
+_HIGHLIGHT_SETTINGS = get_highlight_settings()
+_HIGHLIGHT_LIMIT = _HIGHLIGHT_SETTINGS["TOP_K_HL_PER_SCENE"]
 
 def _as_float(value: Any, default: float = 0.0) -> float:
     """Safely cast ``value`` to ``float`` while providing a fallback."""
@@ -132,11 +140,24 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
                 movie_entry["movie"] = candidate.get("movie")
 
             scenes = candidate.get("scenes")
-            total_scenes = len(scenes) if isinstance(scenes, list) else 0
-            first_scene = None
-            if isinstance(scenes, list) and scenes:
-                first_scene = _normalize_scene(scenes[0])
-            next_cursor = 1 if isinstance(scenes, list) and len(scenes) > 1 else None
+            flattened_scenes = expand_highlight_scenes(
+                scenes, highlight_limit=_HIGHLIGHT_LIMIT
+            )
+
+            if flattened_scenes:
+                total_scenes = len(flattened_scenes)
+                first_scene = _normalize_scene(flattened_scenes[0])
+                next_cursor = 1 if total_scenes > 1 else None
+            else:
+                total_scenes = len(scenes) if isinstance(scenes, list) else 0
+                first_scene = (
+                    _normalize_scene(scenes[0])
+                    if isinstance(scenes, list) and scenes
+                    else None
+                )
+                next_cursor = (
+                    1 if isinstance(scenes, list) and len(scenes) > 1 else None
+                )
 
             formatted_character = {
                 "movie_id": movie_key,
