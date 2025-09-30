@@ -185,6 +185,7 @@ def _finalise_highlight(
     timeline_start: float | None = None,
     timeline_end: float | None = None,
     min_duration: float | None = None,
+    highlight_support: Dict[str, Any] | None = None,
 ) -> Dict[str, Any] | None:
     start_val = _parse_time(accumulator.get("start"))
     end_val = _parse_time(accumulator.get("end"))
@@ -315,6 +316,19 @@ def _finalise_highlight(
         # ghi lại vào highlight
         highlight["end"] = round(end, 3)
         highlight["duration"] = round(duration, 3)
+
+    support_payload: Dict[str, Any] = {}
+    if isinstance(highlight_support, dict):
+        support_payload.update(highlight_support)
+
+    target_support_min_duration = _to_float(min_duration)
+    if target_support_min_duration is None:
+        target_support_min_duration = _to_float(support_payload.get("min_duration"))
+    if target_support_min_duration is not None:
+        support_payload["min_duration"] = float(target_support_min_duration)
+
+    if support_payload:
+        highlight["highlight_support"] = support_payload
 
     return highlight
 
@@ -538,6 +552,20 @@ def _build_highlights(
     merge_gap = _to_float(max_gap) or 0.0
     segments = _segment_target_hits(hits, merge_gap)
 
+
+    highlight_support_meta: Dict[str, Any] = {
+        "det_score_threshold": float(det_th) if det_th is not None else det_th,
+        "min_duration": float(min_duration) if min_duration is not None else None,
+    }
+    if sim_threshold is not None:
+        highlight_support_meta["similarity_threshold"] = float(sim_threshold)
+    if min_score is not None:
+        highlight_support_meta["min_score"] = float(min_score)
+    highlight_support_meta = {
+        key: value for key, value in highlight_support_meta.items() if value is not None
+    }
+
+
     highlights: List[Dict[str, Any]] = []
     for segment_hits in segments:
         accumulator = _accumulate_segment_hits(segment_hits)
@@ -549,6 +577,7 @@ def _build_highlights(
             timeline_start=timeline_start,
             timeline_end=timeline_end,
             min_duration=min_duration,
+            highlight_support=highlight_support_meta,
         )
         if not highlight:
             continue
@@ -607,12 +636,20 @@ def _summarise_highlight_support(
     *,
     det_threshold: float,
     similarity_threshold: float | None,
+    min_duration: float | None = None,
+    min_score: float | None = None
 ) -> Dict[str, Any]:
     summary: Dict[str, Any] = {
         "highlight_count": len(highlights),
         "det_score_threshold": det_threshold,
         "similarity_threshold": similarity_threshold,
     }
+
+    if min_duration is not None:
+        summary["min_duration"] = float(min_duration)
+    if min_score is not None:
+        summary["min_score"] = float(min_score)
+
 
     if not highlights:
         summary["matched_cluster_ids"] = []
@@ -1500,6 +1537,8 @@ def character_task():
                             highlights,
                             det_threshold=float(highlight_det_threshold),
                             similarity_threshold=highlight_similarity_threshold,
+                            min_duration=HIGHLIGHT_MIN_DURATION,
+                            min_score=HIGHLIGHT_MIN_SCORE,
                         )
                         if matcher_clusters:
                             highlight_support["allowed_cluster_ids"] = sorted(

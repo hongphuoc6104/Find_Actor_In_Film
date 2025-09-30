@@ -12,7 +12,7 @@ from tasks.character_task import (
     _build_highlights,
     _limit_highlights_per_scene,
     _make_highlight_matcher,
-
+    _summarise_highlight_support,
 )
 
 
@@ -181,5 +181,72 @@ def test_build_highlights_skips_entries_below_similarity_threshold():
         sim_threshold=DEFAULT_HIGHLIGHT_SIMILARITY,
     )
 
-
     assert highlights == []
+
+
+def test_finalised_highlight_includes_support_thresholds():
+    similarity = DEFAULT_HIGHLIGHT_SIMILARITY + 0.2
+    custom_min_duration = HIGHLIGHT_MIN_DURATION + 1.5
+    custom_min_score = HIGHLIGHT_MIN_SCORE - 0.05
+
+    entries = [
+        {
+            "timestamp": 4.0,
+            "det_score": DEFAULT_HIGHLIGHT_DET_SCORE + 0.05,
+            "actor_similarity": similarity,
+        }
+    ]
+
+    highlights = _build_highlights(
+        entries,
+        det_th=DEFAULT_HIGHLIGHT_DET_SCORE,
+        max_gap=DEFAULT_HIGHLIGHT_GAP_SECONDS,
+        match_fn=lambda _: True,
+        sim_threshold=DEFAULT_HIGHLIGHT_SIMILARITY,
+        min_duration=custom_min_duration,
+        min_score=custom_min_score,
+    )
+
+    assert len(highlights) == 1
+    support = highlights[0].get("highlight_support")
+    assert isinstance(support, dict)
+    assert support["det_score_threshold"] == pytest.approx(DEFAULT_HIGHLIGHT_DET_SCORE)
+    assert support["min_duration"] == pytest.approx(custom_min_duration)
+    assert support["min_score"] == pytest.approx(custom_min_score)
+    assert support["similarity_threshold"] == pytest.approx(
+        DEFAULT_HIGHLIGHT_SIMILARITY
+    )
+
+
+def test_highlight_support_summary_preserves_thresholds():
+    similarity = DEFAULT_HIGHLIGHT_SIMILARITY + 0.25
+    entries = [
+        {
+            "timestamp": 6.0,
+            "det_score": DEFAULT_HIGHLIGHT_DET_SCORE + 0.1,
+            "actor_similarity": similarity,
+        }
+    ]
+
+    highlights = _build_highlights(
+        entries,
+        det_th=DEFAULT_HIGHLIGHT_DET_SCORE,
+        max_gap=DEFAULT_HIGHLIGHT_GAP_SECONDS,
+        match_fn=lambda _: True,
+        sim_threshold=DEFAULT_HIGHLIGHT_SIMILARITY,
+    )
+
+    summary = _summarise_highlight_support(
+        highlights,
+        det_threshold=DEFAULT_HIGHLIGHT_DET_SCORE,
+        similarity_threshold=DEFAULT_HIGHLIGHT_SIMILARITY,
+        min_duration=HIGHLIGHT_MIN_DURATION,
+        min_score=HIGHLIGHT_MIN_SCORE,
+    )
+
+    assert summary["det_score_threshold"] == pytest.approx(DEFAULT_HIGHLIGHT_DET_SCORE)
+    assert summary["similarity_threshold"] == pytest.approx(
+        DEFAULT_HIGHLIGHT_SIMILARITY
+    )
+    assert summary["min_duration"] == pytest.approx(HIGHLIGHT_MIN_DURATION)
+    assert summary["min_score"] == pytest.approx(HIGHLIGHT_MIN_SCORE)

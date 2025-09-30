@@ -551,12 +551,30 @@ def _convert_scene_entry(
             end = _parse_float(h.get("end"))
             if start is None or end is None:
                 continue
-            entry = {
-                "start": start,
-                "end": end,
-                "duration": round(end - start, 3) if end >= start else None,
-                "max_score": _parse_float(h.get("max_score")) or 0.0,
-            }
+
+            support_meta = h.get("highlight_support")
+            if isinstance(support_meta, dict):
+                support_copy: Dict[str, Any] = {}
+                for key, value in support_meta.items():
+                    if key in {
+                        "det_score_threshold",
+                        "similarity_threshold",
+                        "min_similarity",
+                        "max_similarity",
+                        "avg_similarity",
+                        "min_det_score",
+                        "max_det_score",
+                        "min_duration",
+                        "min_score",
+                    }:
+                        parsed = _parse_float(value)
+                        if parsed is not None:
+                            support_copy[key] = parsed
+                        continue
+                    support_copy[key] = value
+                if support_copy:
+                    entry["highlight_support"] = support_copy
+
             max_det_score = _parse_float(h.get("max_det_score"))
             if max_det_score is not None:
                 entry["max_det_score"] = max_det_score
@@ -651,6 +669,8 @@ def _convert_scene_entry(
                 "avg_similarity",
                 "min_det_score",
                 "max_det_score",
+                "min_duration",
+                "min_score",
             }:
                 parsed = _parse_float(value)
                 if parsed is not None:

@@ -150,6 +150,14 @@ const ensureFrameMetadata = (entry) => {
   }
   copy.highlights = normalisedHighlights
 
+  if (entry?.highlight_support && typeof entry.highlight_support === 'object') {
+    copy.highlight_support = { ...entry.highlight_support }
+  }
+  if (entry?.highlight_settings && typeof entry.highlight_settings === 'object') {
+    copy.highlight_settings = { ...entry.highlight_settings }
+  }
+
+
   const highlightTotalValue =
     entry?.highlight_total !== undefined
       ? normaliseNumber(entry.highlight_total, null)
@@ -396,6 +404,7 @@ const updateSceneEntry = (payload) => {
         ? normaliseNumber(payload.next_cursor, null)
         : null,
     highlight_total: sceneHighlightTotal ?? 0,
+    highlight_display_count: sceneHighlightDisplayCount,
     total_scenes:
       sceneHighlightTotal !== null
         ? sceneHighlightTotal
@@ -429,6 +438,7 @@ const updateSceneEntry = (payload) => {
   character.total_scenes = entry.total_scenes
   character.has_more_scenes = entry.has_more
   character.highlight_total = entry.highlight_total
+  character.highlight_display_count = sceneHighlightDisplayCount
 }
 
 const selectMovie = (movieId) => {

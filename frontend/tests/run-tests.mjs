@@ -415,7 +415,7 @@ console.log('Highlight navigation tests passed.')
 
 const backendHighlightMeta = ensureFrameMetadata({
   highlight_total: 3,
-  highlight_support: { min_score: 0.75, min_duration: 4 },
+  highlight_support: { det_score_threshold: 0.75, min_duration: 4 },
   highlights: [
     { start: 0, end: 6, max_score: 0.92 },
     { start: 10, end: 15, max_score: 0.81 },
@@ -436,7 +436,7 @@ assert.equal(
 
 const relaxedHighlightMeta = ensureFrameMetadata({
   highlight_total: 1,
-  highlight_support: { min_score: 0.6, min_duration: 4 },
+  highlight_support: { det_score_threshold: 0.6, min_duration: 4 },
   highlights: [{ start: 30, end: 35, max_score: 0.65 }],
 })
 

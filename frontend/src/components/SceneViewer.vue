@@ -92,9 +92,44 @@ const videoRef = ref(null)
 const videoTime = ref(0)
 const pendingSeekTime = ref(null)
 const activeSegment = ref(null)
+const DEFAULT_HIGHLIGHT_SUPPORT = Object.freeze({
+  det_score_threshold: 0.75,
+  min_duration: 4,
+})
+
+const highlightFilterOptions = computed(() => {
+  const scene = props.scene
+  const options = {}
+  if (scene && typeof scene.highlight_settings === 'object') {
+    options.settings = scene.highlight_settings
+  }
+  if (scene && typeof scene.highlight_support === 'object') {
+    options.support = scene.highlight_support
+  } else {
+    options.support = DEFAULT_HIGHLIGHT_SUPPORT
+  }
+  return options
+})
+
 const filteredHighlights = computed(() => {
   if (!props.scene) return []
-  return filterHighlights(props.scene.highlights ?? [])
+  return filterHighlights(props.scene.highlights ?? [], highlightFilterOptions.value)
+})
+
+const parseCountValue = (value) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const highlightStats = computed(() => {
+  const total = parseCountValue(props.scene?.highlight_total)
+  const display = parseCountValue(props.scene?.highlight_display_count)
+  const filteredCount = filteredHighlights.value.length
+  return {
+    total,
+    display: display !== null ? display : filteredCount,
+    filteredCount,
+  }
 })
 
 const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value)
@@ -214,8 +249,11 @@ const timelineSegments = computed(() => {
   }
 
   const currentActiveId = activeSegment.value?.id ?? null
-
-  return filteredHighlights.value.map((highlight) => {
+  const totalHighlights = highlightStats.value.total ?? highlightStats.value.filteredCount
+  return filteredHighlights.value.map((highlight, index) => {
+    const orderValue = Number.isFinite(highlight.order)
+      ? Number(highlight.order)
+      : index + 1
     const scoreValue = highlight.effective_score ?? highlight.score ?? 0
     const labelScore = Number.isFinite(scoreValue)
       ? `${Math.round(scoreValue * 100)}%`
@@ -230,9 +268,15 @@ const timelineSegments = computed(() => {
           }`
         : ''
 
+    const baseLabel = Number.isFinite(totalHighlights) && totalHighlights > 0
+      ? `Highlight #${orderValue}/${totalHighlights}`
+      : `Highlight #${orderValue}`
+    const label = labelScore ? `${baseLabel} — ${labelScore}` : baseLabel
+
+
     return {
-      order: highlight.order ?? 0,
-      label: labelScore ? `Highlight #${highlight.order} — ${labelScore}` : `Highlight #${highlight.order}`,
+      order: orderValue,
+      label,
       range,
       start: highlight.start,
       end: highlight.end,
@@ -324,9 +368,10 @@ const sceneDetails = computed(() => {
   const details = []
   if (props.movieTitle) details.push({ label: 'Phim', value: props.movieTitle })
   if (props.characterId) details.push({ label: 'Nhân vật', value: props.characterId })
-  const highlightCount = filteredHighlights.value.length
-  if (highlightCount) {
-    details.push({ label: 'Highlight đạt chuẩn', value: highlightCount })
+  const { display, total } = highlightStats.value
+  if (display) {
+    const labelValue = total !== null ? `${display}/${total}` : display
+    details.push({ label: 'Highlight đạt chuẩn', value: labelValue })
   }
   return details
 })
@@ -353,9 +398,19 @@ const onVideoLoadedMetadata = (e) => {
 }
 
 const highlightSummary = computed(() => {
-  const count = filteredHighlights.value.length
-  if (count === 0) return 'Không có highlight đạt chuẩn'
-  return count === 1 ? '1 highlight đạt chuẩn' : `${count} highlight đạt chuẩn`
+  const { display, total } = highlightStats.value
+  const displayValue = Number(display)
+  const effectiveDisplay = Number.isFinite(displayValue) ? displayValue : 0
+  if (!effectiveDisplay) {
+    return 'Không có highlight đạt chuẩn'
+  }
+  const totalValue = Number(total)
+  if (Number.isFinite(totalValue) && totalValue > 0) {
+    return `${effectiveDisplay}/${totalValue} highlight đạt chuẩn`
+  }
+  return effectiveDisplay === 1
+    ? '1 highlight đạt chuẩn'
+    : `${effectiveDisplay} highlight đạt chuẩn`
 })
 </script>
 
