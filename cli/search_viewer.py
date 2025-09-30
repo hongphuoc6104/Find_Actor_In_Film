@@ -29,39 +29,60 @@ def main() -> None:
     frames_root = cfg["storage"].get("frames_root", "")
 
     result = recognize(args.image, top_k=args.top_k)
-    candidates: Dict[str, List[Dict[str, Any]]] = result.get("candidates", {})
+    movies: List[Dict[str, Any]] = result.get("movies", [])
+
+    if not movies:
+        print("No matches available.")
+        return
 
     if result.get("is_unknown", True):
-        print("Unknown face. Showing nearest candidates...")
-        for movie_id, movie_candidates in candidates.items():
-            for cand in movie_candidates:
-                movie = cand.get("movie") or movie_id
-                print(f"Candidate {cand['character_id']} - Movie: {movie}")
+        print("Unknown face. Showing nearest matches by movie...")
+        for movie in movies:
+            movie_label = movie.get("movie") or movie.get("movie_id") or "Unknown movie"
+            match_label = movie.get("match_label") or movie.get("match_status", "near_match")
+            print(f"Movie: {movie_label} ({match_label})")
+            for character in movie.get("characters", []):
+                char_id = character.get("character_id", "unknown")
+                char_label = character.get("match_label") or character.get(
+                    "match_status", "near_match"
+                )
+                print(f"  Candidate {char_id} - {char_label}")
                 images: List[str] = []
-                rep = cand.get("rep_image")
-                if rep:
-                    rep_movie = rep.get("movie")
+                rep = character.get("rep_image")
+                if isinstance(rep, dict):
+                    rep_movie = rep.get("movie") or movie.get("movie")
                     frame = rep.get("frame")
                     if rep_movie and frame:
                         images.append(os.path.join(frames_root, rep_movie, frame))
-                images.extend(cand.get("preview_paths", []))
-                _display(f"{cand['character_id']}:{movie}", images)
+                elif isinstance(rep, str):
+                    images.append(rep)
+                images.extend(character.get("preview_paths") or [])
+                _display(f"{char_id}:{movie_label}", images)
     else:
-        print("Recognized face. Showing frames by movie...")
-        for movie_id, movie_candidates in candidates.items():
-            movie_label = movie_candidates[0].get("movie") if movie_candidates else movie_id
-            print(f"Movie: {movie_label}")
-            for cand in movie_candidates:
-                print(f"  Character {cand['character_id']}")
+        print("Recognized face. Showing matches by movie...")
+        for movie in movies:
+            movie_label = movie.get("movie") or movie.get("movie_id") or "Unknown movie"
+            match_label = movie.get("match_label") or "Recognized"
+            print(f"Movie: {movie_label} ({match_label})")
+            for character in movie.get("characters", []):
+                char_id = character.get("character_id", "unknown")
+                score = character.get("score") or character.get("distance")
+                char_label = character.get("match_label") or "Recognized"
+                if score is not None:
+                    print(f"  Character {char_id} - {char_label} (score: {score:.4f})")
+                else:
+                    print(f"  Character {char_id} - {char_label}")
                 images: List[str] = []
-                rep = cand.get("rep_image")
-                if rep:
-                    rep_movie = rep.get("movie")
+                rep = character.get("rep_image")
+                if isinstance(rep, dict):
+                    rep_movie = rep.get("movie") or movie.get("movie")
                     frame = rep.get("frame")
                     if rep_movie and frame:
                         images.append(os.path.join(frames_root, rep_movie, frame))
-                images.extend(cand.get("preview_paths", []))
-                _display(f"{cand['character_id']}:{movie_label}", images)
+                elif isinstance(rep, str):
+                    images.append(rep)
+                images.extend(character.get("preview_paths") or [])
+                _display(f"{char_id}:{movie_label}", images)
 
 
 if __name__ == "__main__":
