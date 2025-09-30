@@ -140,29 +140,30 @@ const ensureFrameMetadata = (entry) => {
       item && typeof item === 'object' ? ensureFrameMetadata(item) : item,
     )
   }
-// Giữ nguyên highlights từ BE
-copy.highlights = Array.isArray(entry.highlights) ? entry.highlights : []
+  // Giữ nguyên highlights từ BE
+  const rawHighlights = Array.isArray(entry.highlights) ? entry.highlights : []
+  copy.highlights = rawHighlights
 
-// Thêm highlights đã lọc riêng cho FE
-let filteredHighlights = []
-if (Array.isArray(entry.highlights)) {
+  // Ưu tiên danh sách filtered_highlights từ backend/store nếu có, fallback sang tự lọc
   const highlightOptions = {
     support: entry?.highlight_support,
     settings: entry?.highlight_settings,
   }
-  filteredHighlights = filterHighlights(entry.highlights, highlightOptions)
-}
-copy.filtered_highlights = filteredHighlights
+  const filteredSource = Array.isArray(entry.filtered_highlights)
+    ? entry.filtered_highlights
+    : rawHighlights
+  const filteredHighlights = filterHighlights(filteredSource, highlightOptions)
+  copy.filtered_highlights = filteredHighlights
 
-// highlight_total chỉ lấy từ BE, không overwrite
-const highlightTotalValue =
-  entry?.highlight_total !== undefined
-    ? normaliseNumber(entry.highlight_total, null)
-    : null
-copy.highlight_total = highlightTotalValue
+  // highlight_total chỉ lấy từ BE, không overwrite
+  const highlightTotalValue =
+    entry?.highlight_total !== undefined
+      ? normaliseNumber(entry.highlight_total, null)
+      : null
+  copy.highlight_total = highlightTotalValue
 
-// highlight_display_count là số highlight sau lọc
-copy.highlight_display_count = filteredHighlights.length
+  // highlight_display_count là số highlight sau lọc
+  copy.highlight_display_count = filteredHighlights.length
 
 
   if (entry.scene_index !== undefined) {

@@ -85,6 +85,17 @@ assert(
 )
 
 assert(
+  sceneViewerSource.includes('Array.isArray(props.scene.filtered_highlights)'),
+  'Scene viewer should prioritise pre-filtered highlights when provided by the backend',
+)
+
+assert(
+  sceneViewerSource.includes('Array.isArray(props.scene.highlights) ? props.scene.highlights : []'),
+  'Scene viewer should fall back to filtering raw highlights when pre-filtered data is missing',
+)
+
+
+assert(
   sceneViewerSource.includes('video.currentTime = targetTime'),
   'Video playback should seek to the computed padded timestamp',
 )
@@ -264,6 +275,64 @@ assert.equal(
 
 console.log('Asset URL helper tests passed.')
 
+const fallbackFilteredScene = ensureFrameMetadata({
+  highlights: [
+    { id: 'h1', start: 10, end: 14, score: 0.8 },
+  ],
+  highlight_support: { det_score_threshold: 0.75, min_duration: 4 },
+})
+
+assert.equal(
+  fallbackFilteredScene.filtered_highlights.length,
+  1,
+  'Scenes with only raw highlights should be filtered on the client',
+)
+assert.equal(
+  fallbackFilteredScene.highlight_display_count,
+  1,
+  'Filtered highlight counts should reflect the number of accepted segments',
+)
+assert.equal(
+  fallbackFilteredScene.filtered_highlights[0].id,
+  'h1',
+  'Client-side filtering should retain highlight metadata',
+)
+
+const preferredFilteredScene = ensureFrameMetadata({
+  highlights: [],
+  filtered_highlights: [
+    { id: 'h2', start: 5, end: 9, score: 0.82 },
+  ],
+  highlight_support: { det_score_threshold: 0.75, min_duration: 4 },
+  highlight_total: 3,
+})
+
+assert.equal(
+  preferredFilteredScene.highlights.length,
+  0,
+  'Scenes should preserve empty raw highlight lists when sent from the backend',
+)
+assert.equal(
+  preferredFilteredScene.filtered_highlights.length,
+  1,
+  'Scenes should rely on backend-provided filtered highlight lists when available',
+)
+assert.equal(
+  preferredFilteredScene.highlight_display_count,
+  1,
+  'Backend filtered highlight counts should surface through scene metadata',
+)
+assert.equal(
+  preferredFilteredScene.highlight_total,
+  3,
+  'Scene metadata should preserve backend highlight totals when provided',
+)
+assert.equal(
+  preferredFilteredScene.filtered_highlights[0].id,
+  'h2',
+  'Backend filtered highlight metadata should be passed through intact',
+)
+
 const highlightStore = useRecognitionStore()
 highlightStore.resetSearch()
 highlightStore.state.movies = [
@@ -334,8 +403,13 @@ assert.equal(
 )
 assert.equal(
   highlightStore.state.movies[0].characters[0].scene.highlights.length,
+    2,
+  'Character scene should retain the raw highlight list from the backend',
+)
+assert.equal(
+  highlightStore.state.movies[0].characters[0].scene.filtered_highlights.length,
   1,
-  'Character scene should use a single highlight segment',
+  'Character scene should expose a single filtered highlight segment',
 )
 assert.equal(
   highlightStore.state.movies[0].characters[0].scene.scene_index,

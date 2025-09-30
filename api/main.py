@@ -551,6 +551,7 @@ def _convert_scene_entry(
             end = _parse_float(h.get("end"))
             if start is None or end is None:
                 continue
+            entry: Dict[str, Any] = dict(h)
 
             support_meta = h.get("highlight_support")
             if isinstance(support_meta, dict):

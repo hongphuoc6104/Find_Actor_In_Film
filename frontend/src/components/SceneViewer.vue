@@ -113,9 +113,13 @@ const highlightFilterOptions = computed(() => {
 
 const filteredHighlights = computed(() => {
   if (!props.scene) return []
-  return Array.isArray(props.scene.filtered_highlights)
-    ? props.scene.filtered_highlights
-    : filterHighlights(props.scene.filtered_highlights ?? [], highlightFilterOptions.value)
+  // Ưu tiên highlights đã được store lọc sẵn theo ngưỡng backend
+  if (Array.isArray(props.scene.filtered_highlights)) {
+    return props.scene.filtered_highlights
+  }
+  // Fallback: nếu chưa có filtered_highlights, tự lọc từ highlights (hoặc mảng trống)
+  const raw = Array.isArray(props.scene.highlights) ? props.scene.highlights : []
+  return filterHighlights(raw, highlightFilterOptions.value)
 })
 
 const parseCountValue = (value) => {
