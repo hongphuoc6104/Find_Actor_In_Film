@@ -205,7 +205,13 @@ def search_actor(
             per_movie.setdefault(movie_id, []).append(result)
 
         for movie_results in per_movie.values():
-            movie_results.sort(key=lambda item: item.get("distance", 0.0), reverse=True)
+            # Ensure the best match is always first regardless of index metric:
+            # similarity indexes prefer higher scores, distance indexes prefer
+            # lower scores.
+            movie_results.sort(
+                key=lambda item: item.get("distance", 0.0),
+                reverse=is_similarity_index,
+            )
             if top_k is not None and len(movie_results) > int(top_k):
                 del movie_results[int(top_k) :]
 
