@@ -140,32 +140,30 @@ const ensureFrameMetadata = (entry) => {
       item && typeof item === 'object' ? ensureFrameMetadata(item) : item,
     )
   }
-  let normalisedHighlights = []
-  if (Array.isArray(entry.highlights)) {
-    const highlightOptions = {
-      support: entry?.highlight_support,
-      settings: entry?.highlight_settings,
-    }
-    normalisedHighlights = filterHighlights(entry.highlights, highlightOptions)
+// Giữ nguyên highlights từ BE
+copy.highlights = Array.isArray(entry.highlights) ? entry.highlights : []
+
+// Thêm highlights đã lọc riêng cho FE
+let filteredHighlights = []
+if (Array.isArray(entry.highlights)) {
+  const highlightOptions = {
+    support: entry?.highlight_support,
+    settings: entry?.highlight_settings,
   }
-  copy.highlights = normalisedHighlights
+  filteredHighlights = filterHighlights(entry.highlights, highlightOptions)
+}
+copy.filtered_highlights = filteredHighlights
 
-  if (entry?.highlight_support && typeof entry.highlight_support === 'object') {
-    copy.highlight_support = { ...entry.highlight_support }
-  }
-  if (entry?.highlight_settings && typeof entry.highlight_settings === 'object') {
-    copy.highlight_settings = { ...entry.highlight_settings }
-  }
+// highlight_total chỉ lấy từ BE, không overwrite
+const highlightTotalValue =
+  entry?.highlight_total !== undefined
+    ? normaliseNumber(entry.highlight_total, null)
+    : null
+copy.highlight_total = highlightTotalValue
 
+// highlight_display_count là số highlight sau lọc
+copy.highlight_display_count = filteredHighlights.length
 
-  const highlightTotalValue =
-    entry?.highlight_total !== undefined
-      ? normaliseNumber(entry.highlight_total, null)
-      : null
-
-  copy.highlight_total =
-    highlightTotalValue !== null ? highlightTotalValue : normalisedHighlights.length
-  copy.highlight_display_count = normalisedHighlights.length
 
   if (entry.scene_index !== undefined) {
     copy.scene_index = normaliseNumber(entry.scene_index, null)
@@ -391,31 +389,41 @@ const updateSceneEntry = (payload) => {
   }
 
 
-  const entry = {
-    movie_id: movieId,
-    character_id: characterId,
-    scene_index:
-      payload.scene_index !== undefined
-        ? normaliseNumber(payload.scene_index, null)
-        : null,
-    scene: sceneData,
-    next_cursor:
-      payload.next_cursor !== undefined
-        ? normaliseNumber(payload.next_cursor, null)
-        : null,
-    highlight_total: sceneHighlightTotal ?? 0,
-    highlight_display_count: sceneHighlightDisplayCount,
-    total_scenes:
-      sceneHighlightTotal !== null
-        ? sceneHighlightTotal
-        : payload.total_scenes !== undefined
-        ? normaliseNumber(payload.total_scenes, null)
-        : null,
-    has_more:
-      payload.has_more !== undefined
-        ? payload.has_more
-        : payload.next_cursor !== null && payload.next_cursor !== undefined,
-  }
+const entry = {
+  movie_id: movieId,
+  character_id: characterId,
+  scene_index:
+    payload.scene_index !== undefined
+      ? normaliseNumber(payload.scene_index, null)
+      : null,
+  scene: sceneData,
+  next_cursor:
+    payload.next_cursor !== undefined
+      ? normaliseNumber(payload.next_cursor, null)
+      : null,
+  highlight_total: sceneHighlightTotal ?? 0,
+  highlight_display_count: sceneHighlightDisplayCount,
+  total_scenes:
+    sceneHighlightTotal !== null
+      ? sceneHighlightTotal
+      : payload.total_scenes !== undefined
+      ? normaliseNumber(payload.total_scenes, null)
+      : null,
+  has_more:
+    payload.has_more !== undefined
+      ? payload.has_more
+      : payload.next_cursor !== null && payload.next_cursor !== undefined,
+  // ✅ copy thêm support/settings từ sceneData để SceneViewer dùng
+  highlight_support:
+    sceneData?.highlight_support && typeof sceneData.highlight_support === 'object'
+      ? { ...sceneData.highlight_support }
+      : null,
+  highlight_settings:
+    sceneData?.highlight_settings && typeof sceneData.highlight_settings === 'object'
+      ? { ...sceneData.highlight_settings }
+      : null,
+}
+
 
   const key = sceneKey(movieId, characterId)
   state.scenes[key] = entry

@@ -113,7 +113,9 @@ const highlightFilterOptions = computed(() => {
 
 const filteredHighlights = computed(() => {
   if (!props.scene) return []
-  return filterHighlights(props.scene.highlights ?? [], highlightFilterOptions.value)
+  return Array.isArray(props.scene.filtered_highlights)
+    ? props.scene.filtered_highlights
+    : filterHighlights(props.scene.filtered_highlights ?? [], highlightFilterOptions.value)
 })
 
 const parseCountValue = (value) => {
