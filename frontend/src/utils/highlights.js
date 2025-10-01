@@ -169,12 +169,14 @@ export const normaliseHighlight = (rawHighlight, fallbackIndex = 0, thresholds =
   return highlight
 }
 
-export const filterHighlights = (highlights, options = {}) => {
-
-  const cachedMeta =
-    highlights && typeof highlights === 'object' ? highlights.__highlightFilterMeta : null
+const runFilterHighlights = (highlights, options = {}, extraSources = []) => {
+  const list = Array.isArray(highlights) ? highlights : []
+  const cachedMeta = list && typeof list === 'object' ? list.__highlightFilterMeta : null
 
   const thresholdSources = [options, options?.support, options?.settings]
+    .concat(extraSources)
+    .filter((source) => source && typeof source === 'object')
+
   if (cachedMeta) {
     thresholdSources.push(cachedMeta)
   }
@@ -203,14 +205,12 @@ export const filterHighlights = (highlights, options = {}) => {
     },
   }
 
-  if (!Array.isArray(highlights)) {
+  if (!Array.isArray(list)) {
     return { items: [], stats }
   }
 
-
-
   const normalised = []
-  highlights.forEach((item, index) => {
+  list.forEach((item, index) => {
     const highlight = normaliseHighlight(item, index, thresholds)
     if (highlight) {
       normalised.push(highlight)
@@ -253,6 +253,65 @@ export const filterHighlights = (highlights, options = {}) => {
 
   return { items: sorted, stats }
 }
+
+export const filterHighlights = (input, legacyOptions = {}) => {
+  const payload =
+    input && typeof input === 'object' && !Array.isArray(input) ? input : null
+
+  const highlights = payload
+    ? Array.isArray(payload.highlights)
+      ? payload.highlights
+      : Array.isArray(payload.items)
+      ? payload.items
+      : Array.isArray(payload.source)
+      ? payload.source
+      : []
+    : input
+
+  const support = payload?.support ?? legacyOptions?.support
+  const settings = payload?.settings ?? legacyOptions?.settings
+
+  const extraSources = []
+  if (legacyOptions && typeof legacyOptions === 'object') {
+    extraSources.push(legacyOptions)
+    if (legacyOptions.support && typeof legacyOptions.support === 'object') {
+      extraSources.push(legacyOptions.support)
+    }
+    if (legacyOptions.settings && typeof legacyOptions.settings === 'object') {
+      extraSources.push(legacyOptions.settings)
+    }
+  }
+
+  if (payload) {
+    extraSources.push(payload)
+    if (payload.support && typeof payload.support === 'object') {
+      extraSources.push(payload.support)
+    }
+    if (payload.settings && typeof payload.settings === 'object') {
+      extraSources.push(payload.settings)
+    }
+    if (payload.meta && typeof payload.meta === 'object') {
+      extraSources.push(payload.meta)
+    }
+  }
+
+  const result = runFilterHighlights(highlights, { support, settings }, extraSources)
+
+  if (payload?.stats && typeof payload.stats === 'object') {
+    const mergedReasons = {
+      ...(payload.stats.reasons ?? {}),
+      ...(result.stats?.reasons ?? {}),
+    }
+    result.stats = {
+      ...payload.stats,
+      ...result.stats,
+      reasons: mergedReasons,
+    }
+  }
+
+  return result
+}
+
 
 export const filterHighlightsArray = (highlights, options = {}) => {
   const result = filterHighlights(highlights, options)

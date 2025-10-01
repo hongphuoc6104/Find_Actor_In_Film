@@ -142,33 +142,57 @@ const ensureFrameMetadata = (entry) => {
   }
   // Giữ nguyên highlights từ BE
   const rawHighlights = Array.isArray(entry.highlights) ? entry.highlights : []
-  copy.highlights = rawHighlights
+  copy.highlights = rawHighlights.map((item) =>
+    item && typeof item === 'object' ? { ...item } : item,
+  )
 
-  // Ưu tiên danh sách filtered_highlights từ backend/store nếu có, fallback sang tự lọc
   const highlightOptions = {
     support: entry?.highlight_support,
     settings: entry?.highlight_settings,
   }
-  const filteredSource = Array.isArray(entry.filtered_highlights)
-    ? entry.filtered_highlights
-    : rawHighlights
-  const filteredHighlightsResult = filterHighlights(filteredSource, highlightOptions)
-  const filteredHighlights = filteredHighlightsResult.items ?? []
+
+  const filterPayload = {
+    items: Array.isArray(entry.filtered_highlights)
+      ? entry.filtered_highlights
+      : copy.highlights,
+    support: highlightOptions.support,
+    settings: highlightOptions.settings,
+  }
+
+  const existingStats =
+    entry?.__fh_stats && typeof entry.__fh_stats === 'object'
+      ? entry.__fh_stats
+      : entry?.highlight_filter_stats && typeof entry.highlight_filter_stats === 'object'
+      ? entry.highlight_filter_stats
+      : null
+
+  if (existingStats) {
+    filterPayload.stats = existingStats
+  }
+
+  const filteredHighlightsResult = filterHighlights(filterPayload)
+  const filteredHighlights = Array.isArray(filteredHighlightsResult?.items)
+    ? filteredHighlightsResult.items
+    : []
   copy.filtered_highlights = filteredHighlights
 
-  // highlight_total chỉ lấy từ BE, không overwrite
+  if (filteredHighlightsResult?.stats && typeof filteredHighlightsResult.stats === 'object') {
+    copy.__fh_stats = filteredHighlightsResult.stats
+    copy.highlight_filter_stats = filteredHighlightsResult.stats
+  } else if (existingStats) {
+    copy.__fh_stats = existingStats
+    copy.highlight_filter_stats = existingStats
+  }
+
   const highlightTotalValue =
     entry?.highlight_total !== undefined
       ? normaliseNumber(entry.highlight_total, null)
       : null
   copy.highlight_total = highlightTotalValue
 
-  // highlight_display_count là số highlight sau lọc
-  const filteredCount = filteredHighlightsResult.stats?.inCount ?? filteredHighlights.length
+  const filteredCount = filteredHighlights.length
   copy.highlight_display_count = filteredCount
-  if (filteredHighlightsResult.stats) {
-    copy.highlight_filter_stats = filteredHighlightsResult.stats
-  }
+
 
 
   if (entry.scene_index !== undefined) {
@@ -271,17 +295,31 @@ const normaliseCharacter = (character) => {
       ? ensureFrameMetadata(character.scene)
       : character?.scene ?? null
 
+  const rawSceneHighlights = Array.isArray(sceneEntry?.highlights)
+    ? sceneEntry.highlights
+    : []
+  const filteredSceneHighlights = Array.isArray(sceneEntry?.filtered_highlights)
+    ? sceneEntry.filtered_highlights
+    : []
+
+
+  const rawSceneHighlights = Array.isArray(sceneEntry?.highlights)
+    ? sceneEntry.highlights
+    : []
+  const filteredSceneHighlights = Array.isArray(sceneEntry?.filtered_highlights)
+    ? sceneEntry.filtered_highlights
+    : []
+
+
   const highlightTotal =
-    sceneEntry && typeof sceneEntry.highlight_total === 'number'
-      ? sceneEntry.highlight_total
-      : null
+    sceneEntry && sceneEntry.highlight_total !== null && sceneEntry.highlight_total !== undefined
+      ? normaliseNumber(sceneEntry.highlight_total, null)
+      : rawSceneHighlights.length
 
   const highlightDisplayCount =
     sceneEntry && typeof sceneEntry.highlight_display_count === 'number'
       ? sceneEntry.highlight_display_count
-      : Array.isArray(sceneEntry?.highlights)
-      ? sceneEntry.highlights.length
-      : 0
+      : filteredSceneHighlights.length || rawSceneHighlights.length
 
   const totalScenes =
     highlightTotal !== null
@@ -371,18 +409,24 @@ const updateSceneEntry = (payload) => {
       ? ensureFrameMetadata(payload.scene)
       : payload?.scene ?? null
 
-  const sceneHighlightTotal =
-    sceneData && typeof sceneData.highlight_total === 'number'
-      ? sceneData.highlight_total
+  const sceneHighlights = Array.isArray(sceneData?.highlights) ? sceneData.highlights : []
+  const sceneFilteredHighlights = Array.isArray(sceneData?.filtered_highlights)
+    ? sceneData.filtered_highlights
+    : []
+
+  const sceneHighlightTotalRaw =
+    sceneData && sceneData.highlight_total !== null && sceneData.highlight_total !== undefined
+      ? normaliseNumber(sceneData.highlight_total, null)
       : null
 
 
   const sceneHighlightDisplayCount =
     sceneData && typeof sceneData.highlight_display_count === 'number'
       ? sceneData.highlight_display_count
-      : Array.isArray(sceneData?.highlights)
-      ? sceneData.highlights.length
-      : 0
+      : sceneFilteredHighlights.length || sceneHighlights.length
+
+  const resolvedHighlightTotal =
+    sceneHighlightTotalRaw !== null ? sceneHighlightTotalRaw : sceneHighlights.length
 
 
   if (
@@ -392,6 +436,10 @@ const updateSceneEntry = (payload) => {
     payload?.scene_index !== undefined
   ) {
     sceneData.scene_index = normaliseNumber(payload.scene_index, null)
+  }
+
+  if (sceneData && typeof sceneData === 'object') {
+    sceneData.highlight_display_count = sceneHighlightDisplayCount
   }
 
 
@@ -407,13 +455,24 @@ const entry = {
     payload.next_cursor !== undefined
       ? normaliseNumber(payload.next_cursor, null)
       : null,
-  highlight_total: sceneHighlightTotal ?? 0,
+  highlight_total: resolvedHighlightTotal,
   highlight_display_count: sceneHighlightDisplayCount,
   total_scenes:
-    sceneHighlightTotal !== null
-      ? sceneHighlightTotal
+    sceneHighlightTotalRaw !== null
+      ? sceneHighlightTotalRaw
       : payload.total_scenes !== undefined
-      ? normaliseNumber(payload.total_scenes, null)
+      ? normaliseNumber(payload.total_scenes, sceneHighlights.length)
+      : sceneHighlights.length,
+  filtered_highlights: sceneFilteredHighlights,
+  __fh_stats:
+    sceneData?.__fh_stats && typeof sceneData.__fh_stats === 'object'
+      ? sceneData.__fh_stats
+      : null,
+  highlight_filter_stats:
+    sceneData?.highlight_filter_stats && typeof sceneData.highlight_filter_stats === 'object'
+      ? sceneData.highlight_filter_stats
+      : sceneData?.__fh_stats && typeof sceneData.__fh_stats === 'object'
+      ? sceneData.__fh_stats
       : null,
   has_more:
     payload.has_more !== undefined
@@ -452,7 +511,7 @@ const entry = {
   character.total_scenes = entry.total_scenes
   character.has_more_scenes = entry.has_more
   character.highlight_total = entry.highlight_total
-  character.highlight_display_count = sceneHighlightDisplayCount
+  character.highlight_display_count = entry.highlight_display_count
 }
 
 const selectMovie = (movieId) => {
