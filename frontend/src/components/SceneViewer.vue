@@ -111,16 +111,19 @@ const highlightFilterOptions = computed(() => {
   return options
 })
 
-const filteredHighlights = computed(() => {
-  if (!props.scene) return []
-  // Ưu tiên highlights đã được store lọc sẵn theo ngưỡng backend
-  if (Array.isArray(props.scene.filtered_highlights)) {
-    return props.scene.filtered_highlights
+const filteredHighlightsResult = computed(() => {
+  const options = highlightFilterOptions.value
+  if (!props.scene) {
+    return filterHighlights([], options)
   }
-  // Fallback: nếu chưa có filtered_highlights, tự lọc từ highlights (hoặc mảng trống)
-  const raw = Array.isArray(props.scene.highlights) ? props.scene.highlights : []
-  return filterHighlights(raw, highlightFilterOptions.value)
+  const source = Array.isArray(props.scene.filtered_highlights)
+    ? props.scene.filtered_highlights
+    : Array.isArray(props.scene.highlights)
+      ? props.scene.highlights
+      : []
+  return filterHighlights(source, options)
 })
+const filteredHighlights = computed(() => filteredHighlightsResult.value?.items ?? [])
 
 const parseCountValue = (value) => {
   const parsed = Number(value)
@@ -130,11 +133,17 @@ const parseCountValue = (value) => {
 const highlightStats = computed(() => {
   const total = parseCountValue(props.scene?.highlight_total)
   const display = parseCountValue(props.scene?.highlight_display_count)
-  const filteredCount = filteredHighlights.value.length
+  const filterStats = filteredHighlightsResult.value?.stats ?? {
+    inCount: filteredHighlightsResult.value?.items?.length ?? 0,
+    outCount: 0,
+    reasons: { det_score: null, score: null, duration: null },
+  }
+  const filteredCount = filterStats.inCount ?? filteredHighlights.value.length
   return {
     total,
     display: display !== null ? display : filteredCount,
     filteredCount,
+    stats: filterStats,
   }
 })
 

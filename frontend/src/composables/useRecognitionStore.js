@@ -152,7 +152,8 @@ const ensureFrameMetadata = (entry) => {
   const filteredSource = Array.isArray(entry.filtered_highlights)
     ? entry.filtered_highlights
     : rawHighlights
-  const filteredHighlights = filterHighlights(filteredSource, highlightOptions)
+  const filteredHighlightsResult = filterHighlights(filteredSource, highlightOptions)
+  const filteredHighlights = filteredHighlightsResult.items ?? []
   copy.filtered_highlights = filteredHighlights
 
   // highlight_total chỉ lấy từ BE, không overwrite
@@ -163,7 +164,11 @@ const ensureFrameMetadata = (entry) => {
   copy.highlight_total = highlightTotalValue
 
   // highlight_display_count là số highlight sau lọc
-  copy.highlight_display_count = filteredHighlights.length
+  const filteredCount = filteredHighlightsResult.stats?.inCount ?? filteredHighlights.length
+  copy.highlight_display_count = filteredCount
+  if (filteredHighlightsResult.stats) {
+    copy.highlight_filter_stats = filteredHighlightsResult.stats
+  }
 
 
   if (entry.scene_index !== undefined) {

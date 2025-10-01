@@ -40,6 +40,24 @@ const resolveScoreCandidates = (highlight) => {
   return candidates
 }
 
+const resolveReasonThreshold = (sources, keys, fallback) => {
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') {
+      continue
+    }
+    for (const key of keys) {
+      if (key in source) {
+        const parsed = toFiniteNumber(source[key])
+        if (parsed !== null) {
+          return parsed
+        }
+      }
+    }
+  }
+  return fallback
+}
+
+
 const convertAssetFields = (highlight) => {
   const assetKeys = [
     'clip',
@@ -152,9 +170,6 @@ export const normaliseHighlight = (rawHighlight, fallbackIndex = 0, thresholds =
 }
 
 export const filterHighlights = (highlights, options = {}) => {
-  if (!Array.isArray(highlights)) {
-    return []
-  }
 
   const cachedMeta =
     highlights && typeof highlights === 'object' ? highlights.__highlightFilterMeta : null
@@ -166,11 +181,41 @@ export const filterHighlights = (highlights, options = {}) => {
 
   const thresholds = resolveHighlightThresholds(thresholdSources)
 
+  const stats = {
+    inCount: 0,
+    outCount: 0,
+    reasons: {
+      det_score: resolveReasonThreshold(
+        thresholdSources,
+        ['det_score_threshold', 'detScoreThreshold', 'minScore', 'min_score'],
+        thresholds.minScore,
+      ),
+      score: resolveReasonThreshold(
+        thresholdSources,
+        ['score_threshold', 'scoreThreshold', 'minScore', 'min_score'],
+        thresholds.minScore,
+      ),
+      duration: resolveReasonThreshold(
+        thresholdSources,
+        ['minDuration', 'min_duration', 'MIN_HL_DURATION_SEC'],
+        thresholds.minDuration,
+      ),
+    },
+  }
+
+  if (!Array.isArray(highlights)) {
+    return { items: [], stats }
+  }
+
+
+
   const normalised = []
   highlights.forEach((item, index) => {
     const highlight = normaliseHighlight(item, index, thresholds)
     if (highlight) {
       normalised.push(highlight)
+    } else {
+      stats.outCount += 1
     }
   })
 
@@ -204,7 +249,17 @@ export const filterHighlights = (highlights, options = {}) => {
     })
   } catch {}
 
-  return sorted
+  stats.inCount = sorted.length
+
+  return { items: sorted, stats }
+}
+
+export const filterHighlightsArray = (highlights, options = {}) => {
+  const result = filterHighlights(highlights, options)
+  if (!result || typeof result !== 'object') {
+    return []
+  }
+  return Array.isArray(result.items) ? result.items : []
 }
 
 export const __test__ = {
