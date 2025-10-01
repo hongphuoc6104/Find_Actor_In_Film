@@ -21,6 +21,87 @@ const state = reactive({
 
 const sceneKey = (movieId, characterId) => `${movieId ?? ''}::${characterId ?? ''}`
 
+const createSceneCache = () => ({
+  cursor: null,
+  next_cursor: null,
+  entries: {},
+  highlight_total: null,
+  highlight_display_count: 0,
+  total_scenes: null,
+  has_more: false,
+})
+
+const applySceneEntryToCharacter = (
+  movieId,
+  characterId,
+  entry,
+  nextCursor,
+  hasMore,
+  totals = {},
+) => {
+  const movie = state.movies.find((item) => item.movie_id === movieId)
+  if (!movie) {
+    return
+  }
+
+  const character = movie.characters.find((item) => item.character_id === characterId)
+  if (!character) {
+    return
+  }
+
+  const resolvedNextCursor =
+    nextCursor !== undefined ? nextCursor : entry?.next_cursor ?? null
+  const resolvedHasMore =
+    hasMore !== undefined && hasMore !== null
+      ? Boolean(hasMore)
+      : Boolean(
+          resolvedNextCursor !== null && resolvedNextCursor !== undefined,
+        )
+
+  const resolvedTotalScenes =
+    totals.total_scenes ?? entry?.total_scenes ?? null
+  const resolvedHighlightTotal =
+    totals.highlight_total ?? entry?.highlight_total ?? resolvedTotalScenes ?? 0
+  const resolvedHighlightDisplay =
+    totals.highlight_display_count ?? entry?.highlight_display_count ?? 0
+
+  character.scene = entry?.scene ?? null
+  character.scene_index =
+    entry?.scene_index !== undefined && entry?.scene_index !== null
+      ? entry.scene_index
+      : null
+  character.next_scene_cursor = resolvedNextCursor ?? null
+  character.total_scenes = resolvedTotalScenes
+  character.has_more_scenes = resolvedHasMore
+  character.highlight_total = resolvedHighlightTotal
+  character.highlight_display_count = resolvedHighlightDisplay
+}
+
+const resolveActiveSceneEntry = (cache) => {
+  if (!cache || typeof cache !== 'object') {
+    return null
+  }
+
+  const cursor = cache.cursor
+    return null
+
+  const entries = cache.entries
+  if (!entries || typeof entries !== 'object') {
+    return null
+  }
+
+  return entries[cursor] ?? null
+}
+
+const firstNonNull = (...values) => {
+  for (const value of values) {
+    if (value !== null && value !== undefined) {
+      return value
+    }
+  }
+  return null
+}
+
 const currentMovie = computed(() => {
   if (!state.selectedMovieId) {
     return null
@@ -42,12 +123,18 @@ const currentCharacter = computed(() => {
 
 const currentSceneEntry = computed(() => {
   const key = sceneKey(state.selectedMovieId, state.selectedCharacterId)
-  return state.scenes[key] ?? null
+  const cache = state.scenes[key]
+  const entry = resolveActiveSceneEntry(cache)
+  if (!entry) {
+    return null
+  }
+  return entry
 })
 
 const currentScene = computed(() => {
-  if (currentSceneEntry.value?.scene) {
-    return currentSceneEntry.value.scene
+  const entry = currentSceneEntry.value
+  if (entry?.scene) {
+    return entry.scene
   }
   return currentCharacter.value?.scene ?? null
 })
@@ -404,114 +491,267 @@ const updateSceneEntry = (payload) => {
     return
   }
 
-  const sceneData =
+  let sceneIndex =
+    payload.scene_index !== undefined
+      ? normaliseNumber(payload.scene_index, null)
+      : null
+  const nextCursor =
+    payload.next_cursor !== undefined
+      ? normaliseNumber(payload.next_cursor, null)
+      : null
+
+  let sceneData =
     payload?.scene && typeof payload.scene === 'object'
       ? ensureFrameMetadata(payload.scene)
       : payload?.scene ?? null
 
-  const sceneHighlights = Array.isArray(sceneData?.highlights) ? sceneData.highlights : []
-  const sceneFilteredHighlights = Array.isArray(sceneData?.filtered_highlights)
-    ? sceneData.filtered_highlights
+
+  if (
+    sceneIndex === null &&
+    sceneData &&
+    typeof sceneData === 'object' &&
+    sceneData.scene_index !== null &&
+    sceneData.scene_index !== undefined
+  ) {
+    sceneIndex = normaliseNumber(sceneData.scene_index, null)
+  }
+
+  const key = sceneKey(movieId, characterId)
+  const existingCache = state.scenes[key] ?? createSceneCache()
+
+  const entries =
+    existingCache.entries && typeof existingCache.entries === 'object'
+      ? { ...existingCache.entries }
+      : {}
+
+  const previousEntry =
+    sceneIndex !== null && sceneIndex !== undefined ? entries[sceneIndex] ?? null : null
+
+  const freshScene =
+    sceneData && typeof sceneData === 'object' ? sceneData : null
+  const previousScene =
+    previousEntry?.scene && typeof previousEntry.scene === 'object'
+      ? previousEntry.scene
+      : null
+  const baseScene =
+    freshScene ?? (previousScene ? { ...previousScene } : null)
+
+  const sceneFilteredHighlights = (() => {
+    if (Array.isArray(freshScene?.filtered_highlights)) {
+      return freshScene.filtered_highlights
+    }
+    if (Array.isArray(previousEntry?.filtered_highlights)) {
+      return previousEntry.filtered_highlights.map((item) =>
+        item && typeof item === 'object' ? { ...item } : item,
+      )
+    }
+    return []
+  })()
+
+  const sceneHighlights = Array.isArray(baseScene?.highlights)
+    ? baseScene.highlights
     : []
 
-  const sceneHighlightTotalRaw =
-    sceneData && sceneData.highlight_total !== null && sceneData.highlight_total !== undefined
-      ? normaliseNumber(sceneData.highlight_total, null)
+
+  const highlightTotalFromScene =
+    freshScene &&
+    freshScene.highlight_total !== null &&
+    freshScene.highlight_total !== undefined
+      ? normaliseNumber(freshScene.highlight_total, null)
+      : null
+
+  const totalScenesFromPayload =
+    payload.total_scenes !== undefined
+      ? normaliseNumber(payload.total_scenes, sceneHighlights.length)
       : null
 
 
-  const sceneHighlightDisplayCount =
-    sceneData && typeof sceneData.highlight_display_count === 'number'
-      ? sceneData.highlight_display_count
-      : sceneFilteredHighlights.length || sceneHighlights.length
-
-  const resolvedHighlightTotal =
-    sceneHighlightTotalRaw !== null ? sceneHighlightTotalRaw : sceneHighlights.length
+  const previousEntryHighlightTotal = normaliseNumber(previousEntry?.highlight_total, null)
+  const cacheHighlightTotal = normaliseNumber(existingCache.highlight_total, null)
 
 
-  if (
-    sceneData &&
-    typeof sceneData === 'object' &&
-    payload?.scene_index !== null &&
-    payload?.scene_index !== undefined
-  ) {
-    sceneData.scene_index = normaliseNumber(payload.scene_index, null)
-  }
-
-  if (sceneData && typeof sceneData === 'object') {
-    sceneData.highlight_display_count = sceneHighlightDisplayCount
-  }
-
-
-const entry = {
-  movie_id: movieId,
-  character_id: characterId,
-  scene_index:
-    payload.scene_index !== undefined
-      ? normaliseNumber(payload.scene_index, null)
-      : null,
-  scene: sceneData,
-  next_cursor:
-    payload.next_cursor !== undefined
-      ? normaliseNumber(payload.next_cursor, null)
-      : null,
-  highlight_total: resolvedHighlightTotal,
-  highlight_display_count: sceneHighlightDisplayCount,
-  total_scenes:
-    sceneHighlightTotalRaw !== null
-      ? sceneHighlightTotalRaw
-      : payload.total_scenes !== undefined
-      ? normaliseNumber(payload.total_scenes, sceneHighlights.length)
-      : sceneHighlights.length,
-  filtered_highlights: sceneFilteredHighlights,
-  __fh_stats:
-    sceneData?.__fh_stats && typeof sceneData.__fh_stats === 'object'
-      ? sceneData.__fh_stats
-      : null,
-  highlight_filter_stats:
-    sceneData?.highlight_filter_stats && typeof sceneData.highlight_filter_stats === 'object'
-      ? sceneData.highlight_filter_stats
-      : sceneData?.__fh_stats && typeof sceneData.__fh_stats === 'object'
-      ? sceneData.__fh_stats
-      : null,
-  has_more:
-    payload.has_more !== undefined
-      ? payload.has_more
-      : payload.next_cursor !== null && payload.next_cursor !== undefined,
-  // ✅ copy thêm support/settings từ sceneData để SceneViewer dùng
-  highlight_support:
-    sceneData?.highlight_support && typeof sceneData.highlight_support === 'object'
-      ? { ...sceneData.highlight_support }
-      : null,
-  highlight_settings:
-    sceneData?.highlight_settings && typeof sceneData.highlight_settings === 'object'
-      ? { ...sceneData.highlight_settings }
-      : null,
-}
-
-
-  const key = sceneKey(movieId, characterId)
-  state.scenes[key] = entry
-
-  const movie = state.movies.find((item) => item.movie_id === movieId)
-  if (!movie) {
-    return
-  }
-
-  const character = movie.characters.find(
-    (item) => item.character_id === characterId,
+  const resolvedHighlightTotal = firstNonNull(
+    highlightTotalFromScene,
+    previousEntryHighlightTotal,
+    cacheHighlightTotal,
+    totalScenesFromPayload,
+    sceneHighlights.length,
+    0,
   )
-  if (!character) {
-    return
+
+  const previousDisplayCount = normaliseNumber(
+    previousEntry?.highlight_display_count,
+    null,
+  )
+  const cacheDisplayCount = normaliseNumber(existingCache.highlight_display_count, null)
+  const fallbackDisplayCount = sceneFilteredHighlights.length || sceneHighlights.length
+  const highlightDisplayFromScene =
+    freshScene && freshScene.highlight_display_count !== undefined
+      ? normaliseNumber(
+          freshScene.highlight_display_count,
+          fallbackDisplayCount,
+        )
+      : null
+  const resolvedHighlightDisplayCount = firstNonNull(
+    highlightDisplayFromScene,
+    previousDisplayCount,
+    cacheDisplayCount,
+    fallbackDisplayCount,
+    0,
+  )
+
+
+  const resolvedTotalScenes = firstNonNull(
+    totalScenesFromPayload,
+    resolvedHighlightTotal,
+    normaliseNumber(existingCache.total_scenes, null),
+  )
+
+
+  const resolvedStats = (() => {
+    if (freshScene?.__fh_stats && typeof freshScene.__fh_stats === 'object') {
+      return freshScene.__fh_stats
+    }
+    if (
+      freshScene?.highlight_filter_stats &&
+      typeof freshScene.highlight_filter_stats === 'object'
+    ) {
+      return freshScene.highlight_filter_stats
+    }
+    if (previousEntry?.__fh_stats && typeof previousEntry.__fh_stats === 'object') {
+      return previousEntry.__fh_stats
+    }
+    if (
+      previousEntry?.highlight_filter_stats &&
+      typeof previousEntry.highlight_filter_stats === 'object'
+    ) {
+      return previousEntry.highlight_filter_stats
+    }
+    return null
+  })()
+
+  const resolvedSupport =
+    freshScene?.highlight_support && typeof freshScene.highlight_support === 'object'
+      ? { ...freshScene.highlight_support }
+      : previousEntry?.highlight_support &&
+        typeof previousEntry.highlight_support === 'object'
+      ? { ...previousEntry.highlight_support }
+      : null
+
+  const resolvedSettings =
+    freshScene?.highlight_settings && typeof freshScene.highlight_settings === 'object'
+      ? { ...freshScene.highlight_settings }
+      : previousEntry?.highlight_settings &&
+        typeof previousEntry.highlight_settings === 'object'
+      ? { ...previousEntry.highlight_settings }
+      : null
+
+  if (baseScene && typeof baseScene === 'object') {
+    if (sceneIndex !== null && sceneIndex !== undefined) {
+      baseScene.scene_index = sceneIndex
+    }
+    baseScene.highlight_total = resolvedHighlightTotal
+    baseScene.highlight_display_count = resolvedHighlightDisplayCount
+    baseScene.filtered_highlights = sceneFilteredHighlights
+    if (resolvedStats) {
+      baseScene.__fh_stats = resolvedStats
+      baseScene.highlight_filter_stats = resolvedStats
+    }
+    if (resolvedSupport) {
+      baseScene.highlight_support = resolvedSupport
+    }
+    if (resolvedSettings) {
+      baseScene.highlight_settings = resolvedSettings
+    }
   }
 
-  character.scene = entry.scene
-  character.scene_index = entry.scene_index
-  character.next_scene_cursor = entry.next_cursor
-  character.total_scenes = entry.total_scenes
-  character.has_more_scenes = entry.has_more
-  character.highlight_total = entry.highlight_total
-  character.highlight_display_count = entry.highlight_display_count
+  const hasMore =
+    payload.has_more !== undefined
+
+      ? Boolean(payload.has_more)
+      : nextCursor !== null && nextCursor !== undefined
+
+  let activeEntry = previousEntry ?? null
+
+
+  if (sceneIndex !== null && sceneIndex !== undefined) {
+    const mergedEntry = {
+      ...(previousEntry ?? {}),
+      movie_id: movieId,
+      character_id: characterId,
+      scene_index: sceneIndex,
+      scene: baseScene,
+      next_cursor: nextCursor,
+      highlight_total: resolvedHighlightTotal,
+      highlight_display_count: resolvedHighlightDisplayCount,
+      total_scenes: resolvedTotalScenes,
+      filtered_highlights: sceneFilteredHighlights,
+      __fh_stats: resolvedStats,
+      highlight_filter_stats: resolvedStats,
+      has_more: hasMore,
+      highlight_support: resolvedSupport,
+      highlight_settings: resolvedSettings,
+    }
+    entries[sceneIndex] = mergedEntry
+    activeEntry = mergedEntry
+  }
+
+  const updatedCache = {
+    ...existingCache,
+    cursor:
+      sceneIndex !== null && sceneIndex !== undefined
+        ? sceneIndex
+        : existingCache.cursor,
+    next_cursor: nextCursor,
+    entries,
+    highlight_total:
+      sceneIndex !== null && sceneIndex !== undefined
+        ? resolvedHighlightTotal
+        : firstNonNull(existingCache.highlight_total, resolvedHighlightTotal, 0),
+    highlight_display_count:
+      sceneIndex !== null && sceneIndex !== undefined
+        ? resolvedHighlightDisplayCount
+        : firstNonNull(
+            existingCache.highlight_display_count,
+            resolvedHighlightDisplayCount,
+            0,
+          ),
+    total_scenes:
+      sceneIndex !== null && sceneIndex !== undefined
+        ? resolvedTotalScenes
+        : firstNonNull(existingCache.total_scenes, resolvedTotalScenes, null),
+    has_more: Boolean(hasMore),
+  }
+
+  state.scenes[key] = updatedCache
+
+  const characterEntry =
+    sceneIndex !== null && sceneIndex !== undefined
+      ? activeEntry
+      : resolveActiveSceneEntry(updatedCache)
+
+  const finalHighlightTotal = firstNonNull(
+    updatedCache.highlight_total,
+    characterEntry?.highlight_total,
+    0,
+  )
+
+  applySceneEntryToCharacter(
+    movieId,
+    characterId,
+    characterEntry,
+    updatedCache.next_cursor,
+    updatedCache.has_more,
+    {
+      total_scenes: updatedCache.total_scenes ?? null,
+      highlight_total: finalHighlightTotal,
+      highlight_display_count: firstNonNull(
+        updatedCache.highlight_display_count,
+        characterEntry?.highlight_display_count,
+        0,
+      ),
+    },
+  )
 }
 
 const selectMovie = (movieId) => {
@@ -624,7 +864,8 @@ const recordDecision = (movieId, characterId, status) => {
     at: new Date().toISOString(),
     status,
     scene_index:
-      state.scenes[sceneKey(movieId, characterId)]?.scene_index ??
+
+      state.scenes[sceneKey(movieId, characterId)]?.cursor ??
       character.scene_index ??
       null,
   }
@@ -660,8 +901,77 @@ const ensureInitialScene = async (movieId, characterId) => {
 
   const key = sceneKey(movieId, characterId)
   const cached = state.scenes[key]
-  if (cached && cached.scene_index === 0) {
-    return cached
+
+  const cachedEntry =
+    cached?.entries && typeof cached.entries === 'object'
+      ? cached.entries[0] ?? null
+      : null
+
+  if (cachedEntry) {
+    const baseCache = cached ?? createSceneCache()
+    const entries =
+      baseCache.entries && typeof baseCache.entries === 'object'
+        ? { ...baseCache.entries }
+        : {}
+    entries[0] = cachedEntry
+
+    const nextCursor = firstNonNull(
+      cachedEntry.next_cursor,
+      baseCache.next_cursor,
+      null,
+    )
+    const resolvedHasMore =
+      cachedEntry.has_more !== undefined && cachedEntry.has_more !== null
+        ? Boolean(cachedEntry.has_more)
+        : Boolean(nextCursor !== null && nextCursor !== undefined)
+
+    const updatedCache = {
+      ...baseCache,
+      cursor: 0,
+      next_cursor: nextCursor,
+      entries,
+      highlight_total: firstNonNull(
+        cachedEntry.highlight_total,
+        baseCache.highlight_total,
+        0,
+      ),
+      highlight_display_count: firstNonNull(
+        cachedEntry.highlight_display_count,
+        baseCache.highlight_display_count,
+        0,
+      ),
+      total_scenes: firstNonNull(
+        cachedEntry.total_scenes,
+        baseCache.total_scenes,
+        null,
+      ),
+      has_more: resolvedHasMore,
+    }
+
+    state.scenes[key] = updatedCache
+
+    applySceneEntryToCharacter(
+      movieId,
+      characterId,
+      cachedEntry,
+      updatedCache.next_cursor,
+      updatedCache.has_more,
+      {
+        total_scenes: updatedCache.total_scenes ?? cachedEntry.total_scenes ?? null,
+        highlight_total: firstNonNull(
+          updatedCache.highlight_total,
+          cachedEntry.highlight_total,
+          0,
+        ),
+        highlight_display_count: firstNonNull(
+          updatedCache.highlight_display_count,
+          cachedEntry.highlight_display_count,
+          0,
+        ),
+      },
+    )
+
+    return cachedEntry
   }
 
   return loadScene(movieId, characterId, 0)
@@ -705,18 +1015,20 @@ const loadNextSceneForCurrent = async () => {
 
   const key = sceneKey(movie.movie_id, character.character_id)
   const cached = state.scenes[key]
-  const cursor =
-    cached?.next_cursor ??
-    cached?.scene_index === 0
-      ? cached?.next_cursor
-      : character.next_scene_cursor
+  const activeEntry = resolveActiveSceneEntry(cached)
+  const nextCursor = firstNonNull(
+    cached?.next_cursor,
+    activeEntry?.next_cursor,
+    character.next_scene_cursor,
+  )
 
   if (cursor === null || cursor === undefined) {
+  if (nextCursor === null || nextCursor === undefined) {
     state.sceneError = 'Không còn cảnh khác cho nhân vật này.'
     return null
   }
 
-  return loadScene(movie.movie_id, character.character_id, cursor)
+  return loadScene(movie.movie_id, character.character_id, nextCursor)
 }
 
 const recogniseFace = async (file) => {

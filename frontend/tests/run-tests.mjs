@@ -488,7 +488,7 @@ highlightStore.updateSceneEntry({
 })
 
 assert.equal(
-  highlightStore.state.scenes[highlightKey].scene_index,
+  highlightStore.state.scenes[highlightKey].cursor,
   0,
   'First highlight should set cursor 0',
 )
@@ -496,6 +496,13 @@ assert.equal(
   highlightStore.state.scenes[highlightKey].next_cursor,
   1,
   'Next cursor should point to the second highlight',
+)
+const firstEntry = highlightStore.state.scenes[highlightKey].entries[0]
+assert.ok(firstEntry, 'Scene cache should store the first highlight entry')
+assert.equal(
+  firstEntry.next_cursor,
+  1,
+  'First highlight entry should track the next cursor',
 )
 assert.equal(
   highlightStore.state.scenes[highlightKey].total_scenes,
@@ -521,11 +528,6 @@ assert.equal(
   highlightStore.state.movies[0].characters[0].scene.filtered_highlights.length,
   1,
   'Character scene should expose a single filtered highlight segment',
-)
-assert.equal(
-  highlightStore.state.movies[0].characters[0].scene.scene_index,
-  0,
-  'Character scene should report the highlight cursor index',
 )
 assert.equal(
   highlightStore.state.movies[0].characters[0].scene.highlight_total,
@@ -560,6 +562,7 @@ highlightStore.updateSceneEntry({
 
 assert.equal(
   highlightStore.state.scenes[highlightKey].scene_index,
+  highlightStore.state.scenes[highlightKey].cursor,
   1,
   'Second highlight should update the cursor index',
 )
@@ -572,6 +575,11 @@ assert.equal(
   highlightStore.state.scenes[highlightKey].highlight_display_count,
   1,
   'Scene cache should continue reporting filtered highlight counts',
+)
+assert.equal(
+  Object.keys(highlightStore.state.scenes[highlightKey].entries).length,
+  2,
+  'Scene cache should retain previous highlight entries',
 )
 assert.equal(
   highlightStore.state.movies[0].characters[0].scene.highlight_index,
