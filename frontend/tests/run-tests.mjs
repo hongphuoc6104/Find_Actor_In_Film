@@ -69,9 +69,9 @@ const sceneViewerPath = resolve(dirname(fileURLToPath(import.meta.url)), '../src
 const sceneViewerSource = await readFile(sceneViewerPath, 'utf-8')
 
 assert(
-  sceneViewerSource.includes('computeSegmentSeekStart(filteredHighlights.value[0])') ||
-    sceneViewerSource.includes('computeSegmentSeekStart(props.scene.highlights?.[0])'),
-  'Scene viewer should prioritise highlight starts using the padded seek helper when available',
+  sceneViewerSource.includes('computeSegmentSeekStart(effectiveHighlights.value[0])') ||
+    sceneViewerSource.includes('computeSegmentSeekStart(filteredHighlights.value[0])'),
+  'Scene viewer should prioritise highlight starts using the padded seek helper when highlights are available',
 )
 
 assert(
@@ -85,13 +85,52 @@ assert(
 )
 
 assert(
-  sceneViewerSource.includes('Array.isArray(props.scene.filtered_highlights)'),
+  sceneViewerSource.includes('Array.isArray(scene.filtered_highlights)'),
   'Scene viewer should prioritise pre-filtered highlights when provided by the backend',
 )
 
 assert(
-  sceneViewerSource.includes('Array.isArray(props.scene.highlights) ? props.scene.highlights : []'),
-  'Scene viewer should fall back to filtering raw highlights when pre-filtered data is missing',
+  sceneViewerSource.includes('const filteredHighlightsRes = computed(() => {'),
+  'Scene viewer should compute highlight filtering metadata via the helper result structure',
+)
+
+assert(
+  sceneViewerSource.includes('const rawHighlights = computed(() => {'),
+  'Scene viewer should expose raw highlights for rescue rendering when filtering removes all items',
+)
+
+assert(
+  sceneViewerSource.includes('const effectiveHighlights = computed(() => {'),
+  'Scene viewer should expose a fallback highlight list when filtered highlights are empty',
+)
+
+assert(
+  sceneViewerSource.includes('const filterDiagnosticMessage = computed(() => {'),
+  'Scene viewer should surface diagnostic messaging when highlights are filtered out',
+)
+
+assert(
+  sceneViewerSource.includes('scene-viewer__notice') &&
+    sceneViewerSource.includes('Không có highlight đạt chuẩn sau khi áp dụng bộ lọc'),
+  'Scene viewer should render a diagnostic banner when no highlights survive filtering',
+)
+
+assert(
+  sceneViewerSource.includes('Đang hiển thị danh sách highlight gốc'),
+  'Scene viewer should explain that raw highlights are displayed when filters remove all items',
+)
+
+assert(
+  sceneViewerSource.includes("formatReason(reasons.score, 'Điểm')") &&
+    sceneViewerSource.includes("formatReason(reasons.det_score, 'Điểm phát hiện')") &&
+    sceneViewerSource.includes("formatReason(reasons.duration, 'Độ dài')"),
+  'Diagnostic banner should enumerate score, detection score, and duration thresholds',
+)
+
+assert(
+  sceneViewerSource.includes("console.debug('SceneViewer: no visible highlights rendered, falling back to raw data'") &&
+    sceneViewerSource.includes('filterStats: stats'),
+  'Scene viewer should log diagnostic statistics when falling back to raw highlights',
 )
 
 
@@ -275,27 +314,99 @@ assert.equal(
 
 console.log('Asset URL helper tests passed.')
 
-const fallbackFilteredScene = ensureFrameMetadata({
+const clientFilteredScene = ensureFrameMetadata({
   highlights: [
     { id: 'h1', start: 10, end: 14, score: 0.8 },
   ],
-  highlight_support: { det_score_threshold: 0.75, min_duration: 4 },
+  highlight_support: { det_score_threshold: 0.75, min_duration: 4, highlight_count: 1 },
 })
 
 assert.equal(
-  fallbackFilteredScene.filtered_highlights.length,
+  clientFilteredScene.filtered_highlights.length,
   1,
   'Scenes with only raw highlights should be filtered on the client',
 )
 assert.equal(
-  fallbackFilteredScene.highlight_display_count,
+  clientFilteredScene.highlight_display_count,
   1,
   'Filtered highlight counts should reflect the number of accepted segments',
 )
 assert.equal(
-  fallbackFilteredScene.filtered_highlights[0].id,
+  clientFilteredScene.filtered_highlights[0].id,
   'h1',
   'Client-side filtering should retain highlight metadata',
+)
+
+assert.equal(
+  clientFilteredScene.highlight_support.highlight_count,
+  1,
+  'Client-side filtering should preserve highlight support counts from the backend',
+)
+assert(clientFilteredScene.__fh_stats, 'Client-side filtering should expose highlight stats metadata')
+assert.equal(
+  clientFilteredScene.__fh_stats.reasons.duration,
+  4,
+  'Client-side stats should record the duration threshold',
+)
+assert.equal(
+  clientFilteredScene.__fh_stats.reasons.score,
+  0.75,
+  'Client-side stats should record the score threshold',
+)
+assert.equal(
+  clientFilteredScene.__fh_stats.reasons.det_score,
+  0.75,
+  'Client-side stats should record the detection score threshold',
+)
+
+const filterExhaustedScene = ensureFrameMetadata({
+  highlights: [
+    { id: 'raw-1', start: 0, end: 2.5, max_score: 0.5 },
+    { id: 'raw-2', start: 4, end: 6, max_score: 0.55 },
+  ],
+  highlight_support: { det_score_threshold: 0.9, min_duration: 4, highlight_count: 2 },
+})
+
+assert.equal(
+  filterExhaustedScene.filtered_highlights.length,
+  0,
+  'Scenes should report zero filtered highlights when entries do not meet thresholds',
+)
+assert.equal(
+  filterExhaustedScene.highlight_display_count,
+  0,
+  'Scenes should surface a filtered count of zero when filters remove all highlights',
+)
+assert.equal(
+  filterExhaustedScene.highlights.length,
+  2,
+  'Scenes should retain the raw highlight list when falling back to original data',
+)
+assert.equal(
+  filterExhaustedScene.highlight_support.highlight_count,
+  2,
+  'Scenes should retain highlight support counts even when filtering removes all highlights',
+)
+assert(filterExhaustedScene.__fh_stats, 'Scenes should retain highlight filter statistics when filters return no entries')
+assert.equal(
+  filterExhaustedScene.__fh_stats.outCount,
+  2,
+  'Scenes should report the number of highlights removed by filtering',
+)
+assert.equal(
+  filterExhaustedScene.__fh_stats.reasons.score,
+  0.9,
+  'Filter stats should expose the score threshold used when removing highlights',
+)
+assert.equal(
+  filterExhaustedScene.__fh_stats.reasons.det_score,
+  0.9,
+  'Filter stats should expose the detection score threshold used when removing highlights',
+)
+assert.equal(
+  filterExhaustedScene.__fh_stats.reasons.duration,
+  4,
+  'Filter stats should expose the duration threshold used when removing highlights',
 )
 
 const preferredFilteredScene = ensureFrameMetadata({

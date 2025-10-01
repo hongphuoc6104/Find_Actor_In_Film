@@ -303,12 +303,12 @@ const normaliseCharacter = (character) => {
     : []
 
 
-  const rawSceneHighlights = Array.isArray(sceneEntry?.highlights)
-    ? sceneEntry.highlights
-    : []
-  const filteredSceneHighlights = Array.isArray(sceneEntry?.filtered_highlights)
-    ? sceneEntry.filtered_highlights
-    : []
+//  const rawSceneHighlights = Array.isArray(sceneEntry?.highlights)
+//    ? sceneEntry.highlights
+//    : []
+//  const filteredSceneHighlights = Array.isArray(sceneEntry?.filtered_highlights)
+//    ? sceneEntry.filtered_highlights
+//    : []
 
 
   const highlightTotal =
