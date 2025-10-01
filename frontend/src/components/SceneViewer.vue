@@ -5,6 +5,7 @@
         <h3>Highlight nổi bật</h3>
         <p v-if="highlightSummary" class="scene-viewer__meta">{{ highlightSummary }}</p>
       </div>
+      <div v-if="highlightCounter" class="scene-viewer__counter">{{ highlightCounter }}</div>
     </header>
 
     <div class="scene-viewer__layout">
@@ -88,7 +89,11 @@ const props = defineProps({
   movieTitle: { type: String, default: '' },
   characterId: { type: String, default: '' },
   isLoading: { type: Boolean, default: false },
+  highlightIndex: { type: Number, default: null },
+  highlightTotal: { type: Number, default: null },
 })
+
+const emit = defineEmits(['highlight-change'])
 
 const imageSize = reactive({ width: 0, height: 0 })
 const videoSize = reactive({ width: 0, height: 0 })
@@ -100,6 +105,12 @@ const DEFAULT_HIGHLIGHT_SUPPORT = Object.freeze({
   det_score_threshold: 0.75,
   min_duration: 4,
 })
+
+const parseIndexValue = (value) => {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
 
 const resolveSceneIdentifier = (scene) => {
   if (!scene || typeof scene !== 'object') {
@@ -238,6 +249,51 @@ const highlightStats = computed(() => {
   }
 })
 
+
+const resolvedHighlightIndex = computed(() => {
+  const metaIndex = parseIndexValue(props.meta?.scene_index)
+  if (metaIndex !== null) {
+    return metaIndex
+  }
+  return parseIndexValue(props.highlightIndex)
+})
+
+const resolvedHighlightTotal = computed(() => {
+  const stats = highlightStats.value
+  const candidates = [
+    props.meta?.highlight_total,
+    props.meta?.total_scenes,
+    props.meta?.scene_count,
+    props.meta?.highlight_display_count,
+    props.highlightTotal,
+    stats?.display,
+    stats?.total,
+  ]
+  for (const candidate of candidates) {
+    const parsed = parseCountValue(candidate)
+    if (parsed !== null) {
+      return parsed
+    }
+  }
+  return null
+})
+
+const highlightCounter = computed(() => {
+  const index = resolvedHighlightIndex.value
+  const total = resolvedHighlightTotal.value
+  if (index === null && total === null) {
+    return ''
+  }
+  if (index === null) {
+    return total !== null ? `Highlight 0/${total}` : ''
+  }
+  const current = index + 1
+  if (total !== null) {
+    return `Highlight ${current}/${total}`
+  }
+  return `Highlight ${current}`
+})
+
 const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value)
 const isAfterSegment = (time, segment) => {
   if (!isFiniteNumber(time) || !segment) return false
@@ -345,6 +401,22 @@ watch(effectiveHighlights, (segments) => {
   const existing = segments.find((segment) => segment.id === activeSegment.value.id)
   activeSegment.value = existing ?? segments[0]
 })
+
+let lastHighlightIndex = null
+let lastHighlightTotal = null
+watch(
+  () => [resolvedHighlightIndex.value, resolvedHighlightTotal.value],
+  ([index, total]) => {
+    if (lastHighlightIndex === index && lastHighlightTotal === total) {
+      return
+    }
+    lastHighlightIndex = index
+    lastHighlightTotal = total
+    emit('highlight-change', { index, total })
+  },
+  { immediate: true },
+)
+
 /* --- Timeline --- */
 const timelineSegments = computed(() => {
   const format = (ts) => {
@@ -626,6 +698,14 @@ const highlightSummary = computed(() => {
   margin: 0;
   font-size: 1.1rem;
 }
+
+.scene-viewer__counter {
+  margin-left: auto;
+  font-weight: 600;
+  color: #1d4ed8;
+  font-size: 0.95rem;
+}
+
 
 .scene-viewer__meta {
   margin: 0;

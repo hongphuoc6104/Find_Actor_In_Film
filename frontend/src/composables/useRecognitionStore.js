@@ -23,6 +23,7 @@ const sceneKey = (movieId, characterId) => `${movieId ?? ''}::${characterId ?? '
 
 const createSceneCache = () => ({
   cursor: null,
+  scene_index: null,
   next_cursor: null,
   entries: {},
   highlight_total: null,
@@ -83,7 +84,9 @@ const resolveActiveSceneEntry = (cache) => {
   }
 
   const cursor = cache.cursor
+  if (cursor === null || cursor === undefined) {
     return null
+  }
 
   const entries = cache.entries
   if (!entries || typeof entries !== 'object') {
@@ -139,6 +142,86 @@ const currentScene = computed(() => {
   return currentCharacter.value?.scene ?? null
 })
 
+const currentSceneNavigation = computed(() => {
+  const movieId = state.selectedMovieId
+  const characterId = state.selectedCharacterId
+
+  const fallback = {
+    index: null,
+    total: null,
+    displayCount: 0,
+    knownCount: 0,
+    hasMore: false,
+  }
+
+  if (!movieId || !characterId) {
+    return fallback
+  }
+
+  const key = sceneKey(movieId, characterId)
+  const cache = state.scenes[key]
+  const entry = resolveActiveSceneEntry(cache)
+  const character = currentCharacter.value
+
+  const indexCandidates = [
+    cache?.cursor,
+    entry?.scene_index,
+    character?.scene_index,
+  ]
+
+  let index = null
+  for (const candidate of indexCandidates) {
+    const parsed = parseSceneIndex(candidate)
+    if (parsed !== null) {
+      index = parsed
+      break
+    }
+  }
+
+  const knownFromEntries = computeKnownEntryCount(cache?.entries)
+  const displayCandidate = firstNonNull(
+    cache?.highlight_display_count,
+    entry?.highlight_display_count,
+    character?.highlight_display_count,
+    knownFromEntries,
+    0,
+  )
+  const displayCount = normaliseNumber(displayCandidate, 0)
+
+  const totalValue = firstNonNull(
+    cache?.total_scenes,
+    cache?.highlight_total,
+    entry?.total_scenes,
+    entry?.highlight_total,
+    character?.total_scenes,
+    character?.highlight_total,
+    null,
+  )
+
+  const total = (() => {
+    const parsed = parseSceneIndex(totalValue)
+    if (parsed === null) {
+      return null
+    }
+    return parsed + 1
+  })()
+
+  const knownCount = Math.max(
+    displayCount,
+    knownFromEntries,
+    index !== null ? index + 1 : 0,
+  )
+
+  return {
+    index,
+    total,
+    displayCount,
+    knownCount,
+    hasMore: Boolean(firstNonNull(cache?.has_more, character?.has_more_scenes, false)),
+  }
+})
+
+
 const movieProgress = (movieId) => {
   const summary = { confirmed: 0, rejected: 0, pending: 0, total: 0 }
   if (!movieId) {
@@ -184,6 +267,29 @@ const normaliseNumber = (value, fallback = 0) => {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
 }
+
+
+const parseSceneIndex = (value) => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null
+  }
+  return Math.trunc(parsed)
+}
+
+const computeKnownEntryCount = (entries) => {
+  if (!entries || typeof entries !== 'object') {
+    return 0
+  }
+  const indexes = Object.keys(entries)
+    .map((key) => Number(key))
+    .filter((value) => Number.isInteger(value) && value >= 0)
+  if (!indexes.length) {
+    return 0
+  }
+  return Math.max(...indexes) + 1
+}
+
 
 const assetFieldKeys = [
   'frame',
@@ -702,6 +808,10 @@ const updateSceneEntry = (payload) => {
       sceneIndex !== null && sceneIndex !== undefined
         ? sceneIndex
         : existingCache.cursor,
+    scene_index:
+      sceneIndex !== null && sceneIndex !== undefined
+        ? sceneIndex
+        : existingCache.scene_index ?? existingCache.cursor ?? null,
     next_cursor: nextCursor,
     entries,
     highlight_total:
@@ -991,8 +1101,12 @@ const loadScene = async (movieId, characterId, cursor = 0) => {
       character_id: characterId,
       cursor,
     })
-    updateSceneEntry(data)
-    return data
+    const payload = { ...data }
+    if (payload.scene_index === undefined || payload.scene_index === null) {
+      payload.scene_index = cursor
+    }
+    updateSceneEntry(payload)
+    return payload
   } catch (error) {
     const responseMessage =
       error?.response?.data?.detail ??
@@ -1022,7 +1136,6 @@ const loadNextSceneForCurrent = async () => {
     character.next_scene_cursor,
   )
 
-  if (cursor === null || cursor === undefined) {
   if (nextCursor === null || nextCursor === undefined) {
     state.sceneError = 'Không còn cảnh khác cho nhân vật này.'
     return null
@@ -1030,6 +1143,81 @@ const loadNextSceneForCurrent = async () => {
 
   return loadScene(movie.movie_id, character.character_id, nextCursor)
 }
+
+const loadSceneAtIndex = async (movieId, characterId, targetIndex) => {
+  const index = parseSceneIndex(targetIndex)
+  if (!movieId || !characterId || index === null) {
+    state.sceneError = 'Chỉ số highlight không hợp lệ.'
+    state.isSceneLoading = false
+    return null
+  }
+
+  const key = sceneKey(movieId, characterId)
+  const cache = state.scenes[key] ?? createSceneCache()
+  const entries =
+    cache.entries && typeof cache.entries === 'object' ? cache.entries : {}
+  const existingEntry = entries[index]
+
+  if (existingEntry && typeof existingEntry === 'object') {
+    const updatedCache = {
+      ...cache,
+      cursor: index,
+      scene_index: index,
+      entries,
+    }
+    state.scenes[key] = updatedCache
+
+    const totals = {
+      total_scenes: firstNonNull(
+        updatedCache.total_scenes,
+        existingEntry.total_scenes,
+        existingEntry.highlight_total,
+        null,
+      ),
+      highlight_total: firstNonNull(
+        updatedCache.highlight_total,
+        existingEntry.highlight_total,
+        null,
+      ),
+      highlight_display_count: firstNonNull(
+        updatedCache.highlight_display_count,
+        existingEntry.highlight_display_count,
+        null,
+      ),
+    }
+
+    applySceneEntryToCharacter(
+      movieId,
+      characterId,
+      existingEntry,
+      updatedCache.next_cursor,
+      updatedCache.has_more,
+      totals,
+    )
+
+    state.sceneError = ''
+    state.isSceneLoading = false
+    return existingEntry
+  }
+
+  const navigation = currentSceneNavigation.value
+  const knownMaxIndex = Math.max(navigation.knownCount - 1, 0)
+
+  if (!cache.has_more && navigation.total !== null && index >= navigation.total) {
+    state.sceneError = `Highlight #${index + 1} không tồn tại.`
+    state.isSceneLoading = false
+    return null
+  }
+
+  if (!cache.has_more && navigation.total === null && index > knownMaxIndex) {
+    state.sceneError = 'Không còn highlight nào sau vị trí hiện tại.'
+    state.isSceneLoading = false
+    return null
+  }
+
+  return loadScene(movieId, characterId, index)
+}
+
 
 const recogniseFace = async (file) => {
   if (!file) {
@@ -1100,6 +1288,7 @@ export const useRecognitionStore = () => ({
   currentCharacter,
   currentScene,
   currentSceneEntry,
+  currentSceneNavigation,
   overallProgress,
   movieProgress,
   hasPendingCharacters,
@@ -1109,6 +1298,7 @@ export const useRecognitionStore = () => ({
   selectCharacter,
   ensureInitialScene,
   loadScene,
+  loadSceneAtIndex,
   loadNextSceneForCurrent,
   applyDecision,
   updateSceneEntry,

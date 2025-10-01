@@ -157,6 +157,36 @@
               </nav>
 
               <div class="face-search__tab-panel">
+                <div
+                  v-if="activeDetailTab === 'scene' && hasHighlightNavigation"
+                  class="face-search__highlight-nav"
+                >
+                  <button
+                    type="button"
+                    class="face-search__highlight-button"
+                    @click="goToPreviousHighlight"
+                    :disabled="!canGoPreviousHighlight"
+                  >
+                    ⟵ Trước
+                  </button>
+                  <span v-if="highlightLabel" class="face-search__highlight-count">
+                    {{ highlightLabel }}
+                  </span>
+                  <button
+                    type="button"
+                    class="face-search__highlight-button"
+                    @click="goToNextHighlight"
+                    :disabled="!canGoNextHighlight"
+                  >
+                    Tiếp theo ⟶
+                  </button>
+                </div>
+                <p
+                  v-if="sceneStatusMessage && activeDetailTab === 'scene'"
+                  :class="['face-search__highlight-status', { 'is-error': sceneError && !isSceneLoading }]"
+                >
+                  {{ sceneStatusMessage }}
+                </p>
                 <SceneViewer
                   v-if="activeDetailTab === 'scene'"
                   :scene="currentScene"
@@ -164,6 +194,9 @@
                   :movie-title="currentMovie.movie || `Phim #${currentMovie.movie_id}`"
                   :character-id="currentCharacter.character_id"
                   :is-loading="isSceneLoading"
+                  :highlight-index="resolvedHighlightIndex"
+                  :highlight-total="resolvedHighlightTotal"
+                  @highlight-change="handleViewerHighlightChange"
                 />
 
                 <section v-else-if="activeDetailTab === 'history'" class="face-search__history">
@@ -233,6 +266,137 @@ const currentCharacter = computed(() => store.currentCharacter.value)
 const currentScene = computed(() => store.currentScene.value)
 const currentSceneEntry = computed(() => store.currentSceneEntry.value)
 const overallProgress = computed(() => store.overallProgress.value)
+const highlightNavigation = computed(() => store.currentSceneNavigation.value)
+
+const highlightEventSnapshot = ref({ index: null, total: null })
+
+const parseIndex = (value) => {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
+const parseCount = (value) => {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+const resolvedHighlightIndex = computed(() => {
+  const navIndex = parseIndex(highlightNavigation.value.index)
+  if (navIndex !== null) {
+    return navIndex
+  }
+  return parseIndex(highlightEventSnapshot.value.index)
+})
+
+const resolvedHighlightTotal = computed(() => {
+  const navTotal = parseCount(highlightNavigation.value.total)
+  if (navTotal !== null) {
+    return navTotal
+  }
+  const snapshotTotal = parseCount(highlightEventSnapshot.value.total)
+  if (snapshotTotal !== null) {
+    return snapshotTotal
+  }
+  const fallback = Math.max(
+    highlightNavigation.value.displayCount ?? 0,
+    highlightNavigation.value.knownCount ?? 0,
+  )
+  return parseCount(fallback)
+})
+
+const hasHighlightNavigation = computed(() => {
+  const nav = highlightNavigation.value
+  return (
+    resolvedHighlightIndex.value !== null ||
+    parseCount(nav.total) !== null ||
+    (nav.displayCount ?? 0) > 0 ||
+    (nav.knownCount ?? 0) > 0 ||
+    parseCount(highlightEventSnapshot.value.total) !== null
+  )
+})
+
+const highlightLabel = computed(() => {
+  if (!hasHighlightNavigation.value) {
+    return ''
+  }
+  const index = resolvedHighlightIndex.value
+  const nav = highlightNavigation.value
+  const total = resolvedHighlightTotal.value
+  if (index === null) {
+    if (total) {
+      return `Highlight 0/${total}`
+    }
+    const fallbackCount = Math.max(
+      nav.displayCount ?? 0,
+      nav.knownCount ?? 0,
+      parseCount(highlightEventSnapshot.value.total) ?? 0,
+    )
+    if (fallbackCount > 0) {
+      return `Highlight 0/${fallbackCount}`
+    }
+    return 'Highlight'
+  }
+
+  const current = index + 1
+  if (total) {
+    return `Highlight ${current}/${total}`
+  }
+
+  const fallbackTotal = Math.max(nav.displayCount ?? 0, nav.knownCount ?? 0)
+  if (nav.hasMore && fallbackTotal <= current) {
+    return `Highlight ${current}+`
+  }
+  if (nav.hasMore) {
+    return fallbackTotal > 0
+      ? `Highlight ${current}/${fallbackTotal}+`
+      : `Highlight ${current}+`
+  }
+  if (fallbackTotal > 0) {
+    return `Highlight ${current}/${fallbackTotal}`
+  }
+  return `Highlight ${current}`
+})
+
+const canGoPreviousHighlight = computed(() => {
+  const index = resolvedHighlightIndex.value
+  return index !== null && index > 0 && !isSceneLoading.value
+})
+
+const canGoNextHighlight = computed(() => {
+  if (!hasHighlightNavigation.value || isSceneLoading.value) {
+    return false
+  }
+  const nav = highlightNavigation.value
+  const index = resolvedHighlightIndex.value
+  const total = resolvedHighlightTotal.value
+  if (total) {
+    if (index === null) {
+      return total > 0
+    }
+    return index + 1 < total
+  }
+  if (nav.hasMore) {
+    return true
+  }
+  const fallbackTotal = Math.max(nav.knownCount ?? 0, nav.displayCount ?? 0)
+  if (fallbackTotal === 0) {
+    return false
+  }
+  if (index === null) {
+    return true
+  }
+  return index + 1 < fallbackTotal
+})
+
+const sceneStatusMessage = computed(() => {
+  if (isSceneLoading.value) {
+    return 'Đang tải highlight…'
+  }
+  if (sceneError.value) {
+    return sceneError.value
+  }
+  return ''
+})
 
 const DETAIL_TAB_OPTIONS = [
   { id: 'scene', label: 'Khung cảnh' },
@@ -297,6 +461,40 @@ const handleSelectCharacter = (movieId, characterId) => {
   store.selectCharacter(movieId, characterId)
 }
 
+
+const goToHighlight = async (targetIndex) => {
+  const movie = currentMovie.value
+  const character = currentCharacter.value
+  if (!movie || !character) {
+    return
+  }
+  await store.loadSceneAtIndex(movie.movie_id, character.character_id, targetIndex)
+}
+
+const goToPreviousHighlight = async () => {
+  if (!canGoPreviousHighlight.value) {
+    return
+  }
+  const target = (resolvedHighlightIndex.value ?? 0) - 1
+  await goToHighlight(target)
+}
+
+const goToNextHighlight = async () => {
+  if (!canGoNextHighlight.value) {
+    return
+  }
+  const current = resolvedHighlightIndex.value ?? -1
+  await goToHighlight(current + 1)
+}
+
+const handleViewerHighlightChange = (payload) => {
+  const index = parseIndex(payload?.index)
+  const total = parseCount(payload?.total)
+  highlightEventSnapshot.value = {
+    index,
+    total,
+  }
+}
 
 const ensureScene = async () => {
   const movieId = store.selectedMovieId.value
@@ -378,7 +576,7 @@ const detailInfo = computed(() => {
     }
     if (character.score !== undefined && character.score !== null) {
       items.push({ label: 'Điểm giống nhau', value: formatScore(character.score) })
-    }
+}
     if (character.count) {
       items.push({ label: 'Số lần xuất hiện', value: character.count })
     }
@@ -403,6 +601,7 @@ const detailInfo = computed(() => {
 watch(
   () => [store.selectedMovieId.value, store.selectedCharacterId.value],
   async () => {
+    highlightEventSnapshot.value = { index: null, total: null }
     await ensureScene()
   },
   { immediate: true },
@@ -763,6 +962,56 @@ button.secondary {
   gap: 1.25rem;
 }
 
+.face-search__highlight-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid var(--surface-border);
+  border-radius: 0.75rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.face-search__highlight-button {
+  border: 1px solid #cbd5f5;
+  background: #ffffff;
+  border-radius: 999px;
+  padding: 0.4rem 0.95rem;
+  font-weight: 600;
+  color: #1e293b;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.face-search__highlight-button:not(:disabled):hover {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.face-search__highlight-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.face-search__highlight-count {
+  font-weight: 700;
+  color: #1d4ed8;
+  font-size: 0.95rem;
+}
+
+.face-search__highlight-status {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #1e293b;
+}
+
+.face-search__highlight-status.is-error {
+  color: #dc2626;
+}
+
 .face-search__tabs {
   display: flex;
   flex-wrap: wrap;
@@ -787,56 +1036,6 @@ button.secondary {
 .face-search__tab:hover {
   background: rgba(37, 99, 235, 0.12);
 }
-
-.face-search__tab.active {
-  background: #2563eb;
-  color: #f8fafc;
-}
-
-.face-search__tab-panel {
-  display: grid;
-  gap: 1.25rem;
-}
-
-.face-search__history {
-  display: grid;
-  gap: 0.75rem;
-  background: #f8fafc;
-  border: 1px solid var(--surface-border);
-  border-radius: var(--surface-radius);
-  padding: 1rem 1.25rem;
-}
-
-.face-search__history h3 {
-  margin: 0;
-  font-size: 1.05rem;
-}
-
-.face-search__history ul {
-  margin: 0;
-  padding-left: 1.1rem;
-  display: grid;
-  gap: 0.5rem;
-}
-
-.face-search__history-status {
-  font-weight: 600;
-}
-
-.face-search__history-meta {
-  color: #475569;
-  margin-left: 0.35rem;
-}
-
-.face-search__info {
-  display: grid;
-  gap: 0.75rem;
-  background: #f8fafc;
-  border: 1px solid var(--surface-border);
-  border-radius: var(--surface-radius);
-  padding: 1rem 1.25rem;
-}
-
 .face-search__info h3 {
   margin: 0;
 }
