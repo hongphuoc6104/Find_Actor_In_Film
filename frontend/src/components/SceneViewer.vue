@@ -48,6 +48,10 @@
           </dl>
         </section>
 
+        <p v-if="filterDiagnosticMessage" class="scene-viewer__notice">
+          {{ filterDiagnosticMessage }}
+        </p>
+
         <details v-if="timelineSegments.length" class="scene-viewer__panel scene-viewer__timeline" open>
           <summary>Những đoạn highlight có nhân vật xuất hiện nổi bật</summary>
           <ol>
@@ -97,6 +101,22 @@ const DEFAULT_HIGHLIGHT_SUPPORT = Object.freeze({
   min_duration: 4,
 })
 
+const resolveSceneIdentifier = (scene) => {
+  if (!scene || typeof scene !== 'object') {
+    return null
+  }
+  return (
+    scene.id ??
+    scene.scene_id ??
+    scene.sceneId ??
+    scene.uuid ??
+    scene.key ??
+    scene.slug ??
+    null
+  )
+}
+
+
 const highlightFilterOptions = computed(() => {
   const scene = props.scene
   const options = {}
@@ -111,19 +131,90 @@ const highlightFilterOptions = computed(() => {
   return options
 })
 
-const filteredHighlightsResult = computed(() => {
+const buildFallbackStats = (items = []) => ({
+  inCount: items.length,
+  outCount: 0,
+  reasons: { det_score: null, score: null, duration: null },
+})
+
+const filteredHighlightsRes = computed(() => {
+  const scene = props.scene
   const options = highlightFilterOptions.value
-  if (!props.scene) {
+  if (!scene) {
     return filterHighlights([], options)
   }
-  const source = Array.isArray(props.scene.filtered_highlights)
-    ? props.scene.filtered_highlights
-    : Array.isArray(props.scene.highlights)
-      ? props.scene.highlights
-      : []
-  return filterHighlights(source, options)
+
+  if (Array.isArray(scene.filtered_highlights)) {
+    const items = scene.filtered_highlights
+    const stats =
+      scene.highlight_filter_stats && typeof scene.highlight_filter_stats === 'object'
+        ? scene.highlight_filter_stats
+        : buildFallbackStats(items)
+    return { items, stats }
+  }
+
+  const source = Array.isArray(scene.highlights) ? scene.highlights : []
+  return filterHighlights(source, {
+    settings: options.settings,
+    support: options.support,
+  })
 })
-const filteredHighlights = computed(() => filteredHighlightsResult.value?.items ?? [])
+
+const rawHighlights = computed(() => {
+  if (!Array.isArray(props.scene?.highlights)) {
+    return []
+  }
+  return props.scene.highlights
+})
+
+const filteredHighlights = computed(() => filteredHighlightsRes.value?.items ?? [])
+
+const filterStats = computed(() => {
+  const stats = filteredHighlightsRes.value?.stats
+  return stats && typeof stats === 'object' ? stats : buildFallbackStats(filteredHighlights.value)
+})
+
+const effectiveHighlights = computed(() => {
+  if (filteredHighlights.value.length) {
+    return filteredHighlights.value
+  }
+  return rawHighlights.value.map((item, index) => {
+    if (!item || typeof item !== 'object') {
+      return item
+    }
+    if (item.id !== undefined && item.id !== null && item.id !== '') {
+      return item
+    }
+    return { ...item, id: `raw-highlight-${index}` }
+  })
+})
+
+const filterDiagnosticMessage = computed(() => {
+  if (filteredHighlights.value.length || !rawHighlights.value.length) {
+    return ''
+  }
+  const outCount = Number(filterStats.value?.outCount ?? 0)
+  if (!Number.isFinite(outCount) || outCount <= 0) {
+    return ''
+  }
+
+  const reasons = filterStats.value?.reasons ?? {}
+  const parts = []
+  const formatReason = (value, label) => {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      parts.push(`${label} ≥ ${parsed}`)
+    }
+  }
+  formatReason(reasons.score, 'Điểm')
+  formatReason(reasons.det_score, 'Điểm phát hiện')
+  formatReason(reasons.duration, 'Độ dài')
+
+  const thresholdsText = parts.length ? ` (ngưỡng: ${parts.join(', ')})` : ''
+  return `Không có highlight đạt chuẩn sau khi áp dụng bộ lọc${thresholdsText}. Đang hiển thị danh sách highlight gốc (${outCount} mục bị loại).`
+  return `Không có highlight đạt chuẩn sau khi áp dụng bộ lọc${thresholdsText}. Đang hiển thị danh sách highlight gốc (${outCount} mục bị loại).`
+})
+
 
 const parseCountValue = (value) => {
   const parsed = Number(value)
@@ -133,17 +224,17 @@ const parseCountValue = (value) => {
 const highlightStats = computed(() => {
   const total = parseCountValue(props.scene?.highlight_total)
   const display = parseCountValue(props.scene?.highlight_display_count)
-  const filterStats = filteredHighlightsResult.value?.stats ?? {
-    inCount: filteredHighlightsResult.value?.items?.length ?? 0,
-    outCount: 0,
-    reasons: { det_score: null, score: null, duration: null },
-  }
-  const filteredCount = filterStats.inCount ?? filteredHighlights.value.length
+  const filteredCount = filterStats.value?.inCount ?? filteredHighlights.value.length
+  const effectiveCount = effectiveHighlights.value.length
+  const usingRescuePath = filteredHighlights.value.length === 0 && effectiveCount > 0
+  const resolvedDisplay = display !== null ? display : filteredCount
   return {
     total,
-    display: display !== null ? display : filteredCount,
+    display: usingRescuePath ? effectiveCount : resolvedDisplay,
     filteredCount,
-    stats: filterStats,
+    effectiveCount,
+    rescueCount: usingRescuePath ? effectiveCount : 0,
+    stats: filterStats.value,
   }
 })
 
@@ -188,8 +279,8 @@ const sceneStartTime = computed(() => {
 
   if (!props.scene) return null
 
-  const highlightStart = filteredHighlights.value.length
-    ? computeSegmentSeekStart(filteredHighlights.value[0])
+  const highlightStart = effectiveHighlights.value.length
+    ? computeSegmentSeekStart(effectiveHighlights.value[0])
     : null
 
   const candidates = [
@@ -208,7 +299,7 @@ const sceneStartTime = computed(() => {
 /* --- Video state --- */
 const resetImageSize = () => { imageSize.width = 0; imageSize.height = 0 }
 const resetVideoState = () => {
-  activeSegment.value = filteredHighlights.value[0] ?? null
+  activeSegment.value = effectiveHighlights.value[0] ?? null
   videoSize.width = parseDimension(props.scene?.width)
   videoSize.height = parseDimension(props.scene?.height)
   const safeStart = sceneStartTime.value ?? 0
@@ -242,7 +333,7 @@ const sceneImage = computed(() => {
 
 watch(() => props.scene, () => { resetImageSize(); resetVideoState() })
 watch(() => sceneVideo.value, () => { resetVideoState() })
-watch(filteredHighlights, (segments) => {
+watch(effectiveHighlights, (segments) => {
   if (!segments.length) {
     activeSegment.value = null
     return
@@ -264,8 +355,21 @@ const timelineSegments = computed(() => {
   }
 
   const currentActiveId = activeSegment.value?.id ?? null
-  const totalHighlights = highlightStats.value.total ?? highlightStats.value.filteredCount
-  return filteredHighlights.value.map((highlight, index) => {
+  const stats = highlightStats.value
+  const totalHighlights = (() => {
+    const parsedTotal = Number(stats.total)
+    if (Number.isFinite(parsedTotal) && parsedTotal > 0) {
+      return parsedTotal
+    }
+    if (stats.filteredCount) {
+      return stats.filteredCount
+    }
+    if (stats.effectiveCount) {
+      return stats.effectiveCount
+    }
+    return effectiveHighlights.value.length
+  })()
+  return effectiveHighlights.value.map((highlight, index) => {
     const orderValue = Number.isFinite(highlight.order)
       ? Number(highlight.order)
       : index + 1
@@ -334,7 +438,7 @@ const onVideoTimeUpdate = (e) => {
   const currentTime = video.currentTime ?? 0
   videoTime.value = currentTime
 
-  const segments = filteredHighlights.value
+  const segments = effectiveHighlights.value
   if (!segments.length) {
     return
   }
@@ -391,7 +495,75 @@ const sceneDetails = computed(() => {
   return details
 })
 
-const hasSidebarContent = computed(() => Boolean(sceneDetails.value.length || timelineSegments.value.length))
+watch(
+  () => props.scene?.highlights ?? null,
+  (highlights) => {
+    if (!Array.isArray(highlights)) {
+      return
+    }
+    const sceneId = resolveSceneIdentifier(props.scene)
+    highlights.forEach((item, index) => {
+      if (!item || typeof item !== 'object') {
+        console.debug('SceneViewer: highlight entry is not an object', {
+          sceneId,
+          index,
+          entry: item,
+        })
+        return
+      }
+      const missing = []
+      if (item.start === undefined || item.start === null) missing.push('start')
+      if (item.end === undefined || item.end === null) missing.push('end')
+      if (!('id' in item) || item.id === null || item.id === '') missing.push('id')
+      if (missing.length) {
+        console.debug('SceneViewer: highlight missing payload fields', {
+          sceneId,
+          index,
+          missing,
+          highlight: item,
+        })
+      }
+    })
+  },
+  { immediate: true },
+)
+
+const zeroHighlightLogKey = ref(null)
+watch(
+  () => effectiveHighlights.value.length,
+  (length) => {
+    if (!props.scene) {
+      return
+    }
+    if (length > 0) {
+      zeroHighlightLogKey.value = null
+      return
+    }
+    const rawCount = rawHighlights.value.length
+    if (!rawCount) {
+      return
+    }
+    const filteredCount = filteredHighlights.value.length
+    const stats = filterStats.value
+    const sceneId = resolveSceneIdentifier(props.scene)
+    const key = `${sceneId ?? 'unknown'}::${rawCount}::${filteredCount}`
+    if (zeroHighlightLogKey.value === key) {
+      return
+    }
+    zeroHighlightLogKey.value = key
+    console.debug('SceneViewer: no visible highlights rendered, falling back to raw data', {
+      sceneId,
+      rawCount,
+      filteredCount,
+      filterStats: stats,
+    })
+  },
+  { immediate: true },
+)
+
+const hasSidebarContent = computed(
+  () => Boolean(sceneDetails.value.length || timelineSegments.value.length || filterDiagnosticMessage.value),
+)
 
 const onImageLoad = (e) => {
   const { naturalWidth, naturalHeight } = e.target || {}
@@ -567,6 +739,18 @@ const highlightSummary = computed(() => {
 .scene-viewer__timeline {
   background: #f1f5f9;
 }
+
+.scene-viewer__notice {
+  margin: 0 0 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.65rem;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
 
 .scene-viewer__timeline summary {
   cursor: pointer;
