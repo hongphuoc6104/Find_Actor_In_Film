@@ -395,11 +395,18 @@ def _convert_scene_entry(
     if scene is None:
         return None
 
+    source_scene: Dict[str, Any]
     if not isinstance(scene, dict):
         if isinstance(scene, str):
+            source_scene = {}
             scene = {"frame": scene}
         else:
             return scene
+    else:
+        source_scene = scene
+        scene = dict(scene)
+
+    scene.setdefault("highlights", source_scene.get("highlights", []))
 
     converted = scene.copy()
     effective_movie = converted.get("movie") or movie
@@ -657,6 +664,14 @@ def _convert_scene_entry(
                     entry["supporting_detections"] = support_entries
             normalized.append(entry)
         converted["highlights"] = normalized
+        highlights = normalized
+
+    if not isinstance(highlights, list):
+        highlights = []
+        converted["highlights"] = highlights
+
+    if "highlight_total" not in converted or converted.get("highlight_total") is None:
+        converted["highlight_total"] = len(highlights)
 
     support_meta = converted.get("highlight_support")
     if isinstance(support_meta, dict):

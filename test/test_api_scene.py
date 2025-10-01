@@ -351,6 +351,7 @@ def test_scene_endpoint_flattens_highlights(tmp_path, monkeypatch):
             assert scene_two["highlight_index"] == 1
             assert scene_two["highlight_total"] == 2
             assert scene_two["source_scene_index"] == 4
+            assert isinstance(scene_two["highlights"], list)
             assert len(scene_two["highlights"]) == 1
             second_highlight = scene_two["highlights"][0]
             assert second_highlight["start"] == 20.0
@@ -424,6 +425,7 @@ def test_scene_endpoint_falls_back_when_no_highlights(tmp_path, monkeypatch):
             assert scene["scene_index"] == 0
             assert scene.get("highlight_total") == 0
             assert scene.get("highlights") == []
+            assert isinstance(scene.get("highlights"), list)
             assert scene.get("source_scene_index") == 0
             assert scene["frame"].startswith(main.FRAMES_ROUTE)
             assert scene["frame_url"].startswith(main.FRAMES_ROUTE)
@@ -560,6 +562,8 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
             assert rep["frame"].startswith(main.FRAMES_ROUTE)
             assert rep["frame_url"] == rep["frame"]
             assert rep["frame_name"] == frame_name
+            assert rep["highlights"] == []
+            assert rep["highlight_total"] == 0
 
             scene = character["scene"]
             assert scene["frame"].startswith(main.FRAMES_ROUTE)
@@ -568,11 +572,15 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
             assert scene["video_url"].startswith(main.VIDEOS_ROUTE)
             assert scene["start_time"] == 1.5
             assert scene["timeline"][0]["bbox"] == [0, 0, 50, 60]
+            assert scene["highlights"] == []
+            assert scene["highlight_total"] == 0
 
             scenes = character.get("scenes")
             assert scenes and scenes[0]["frame"].startswith(main.FRAMES_ROUTE)
             assert scenes[0]["frame_name"] == frame_name
             assert scenes[0]["video_url"].startswith(main.VIDEOS_ROUTE)
+            assert scenes[0]["highlights"] == []
+            assert scenes[0]["highlight_total"] == 0
 
             preview_entry = character["previews"][0]
             assert preview_entry["frame"].startswith(main.FRAMES_ROUTE)
