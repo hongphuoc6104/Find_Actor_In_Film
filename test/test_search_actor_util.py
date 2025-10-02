@@ -2,6 +2,7 @@ import json
 import sys
 from types import SimpleNamespace, ModuleType
 import pytest
+import os
 
 np = pytest.importorskip("numpy")
 
@@ -45,14 +46,16 @@ class DummyFaceAnalysis:
         face = SimpleNamespace(det_score=1.0, embedding=self.embedding)
         return [face]
 
-
-def _setup_env(tmp_path, monkeypatch, rep_image=None):
+def _setup_env(tmp_path, monkeypatch, rep_image=None, preview_paths=None, previews_root=""):
     emb = np.array([1.0, 0.0], dtype=np.float32)
     dummy_app = DummyFaceAnalysis(emb)
     monkeypatch.setattr(sa, "FaceAnalysis", lambda *args, **kwargs: dummy_app)
     cfg = {
         "embedding": {"model": "dummy", "providers": [], "l2_normalize": False},
-        "storage": {"characters_json": str(tmp_path / "characters.json")},
+        "storage": {
+            "characters_json": str(tmp_path / "characters.json"),
+            "cluster_previews_root": previews_root,
+        },
         "index": {"type": "ip"},
     }
     monkeypatch.setattr(sa, "load_config", lambda: cfg)
@@ -74,6 +77,8 @@ def _setup_env(tmp_path, monkeypatch, rep_image=None):
     }
     if rep_image is not None:
         data["0"]["0"]["rep_image"] = rep_image
+    if preview_paths is not None:
+        data["0"]["0"]["preview_paths"] = preview_paths
 
     with open(tmp_path / "characters.json", "w", encoding="utf-8") as f:
         json.dump(data, f)
@@ -112,3 +117,33 @@ def test_search_actor_returns_rep_image(monkeypatch, tmp_path):
     img_path, emb = _setup_env(tmp_path, monkeypatch, rep_image=rep)
     matches = sa.search_actor(str(img_path), k=1)
     assert matches["0"][0]["rep_image"] == rep
+
+
+def test_search_actor_preview_paths(monkeypatch, tmp_path):
+    previews_root = "/data/previews"
+    preview_rel = "relative.jpg"
+    preview_abs = "/already/absolute.jpg"
+    preview_http = "https://example.com/image.jpg"
+    preview_protocol_rel = "//cdn.example.com/image.jpg"
+
+    img_path, emb = _setup_env(
+        tmp_path,
+        monkeypatch,
+        preview_paths=[
+            preview_rel,
+            preview_abs,
+            preview_http,
+            preview_protocol_rel,
+        ],
+        previews_root=previews_root,
+    )
+
+    results = sa.search_actor(str(img_path), k=1, return_emb=True)
+    search_func = results["search_func"]
+    matches = search_func(np.asarray([emb], dtype=np.float32))
+
+    normalized = matches["0"][0]["preview_paths"]
+    assert normalized[0] == os.path.join(previews_root, preview_rel)
+    assert normalized[1] == preview_abs
+    assert normalized[2] == preview_http
+    assert normalized[3] == preview_protocol_rel

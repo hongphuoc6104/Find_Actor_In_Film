@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any, Dict, List, Union
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -186,10 +187,21 @@ def search_actor(
                 continue
 
             preview_paths = char_info.get("preview_paths", [])
-            normalized_previews = [
-                p if os.path.isabs(p) else os.path.join(previews_root, p)
-                for p in preview_paths
-            ]
+
+            def _is_absolute_url(path: str) -> bool:
+                if not isinstance(path, str):
+                    return False
+                if path.startswith("//"):
+                    return True
+                parsed = urlparse(path)
+                return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+            normalized_previews = []
+            for p in preview_paths:
+                if _is_absolute_url(p) or os.path.isabs(p):
+                    normalized_previews.append(p)
+                else:
+                    normalized_previews.append(os.path.join(previews_root, p))
             result = {
                 "movie_id": movie_id,
                 "movie": char_info.get("movie"),
