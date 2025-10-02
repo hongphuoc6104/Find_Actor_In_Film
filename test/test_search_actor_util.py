@@ -53,6 +53,7 @@ def _setup_env(tmp_path, monkeypatch, rep_image=None):
     cfg = {
         "embedding": {"model": "dummy", "providers": [], "l2_normalize": False},
         "storage": {"characters_json": str(tmp_path / "characters.json")},
+        "index": {"type": "ip"},
     }
     monkeypatch.setattr(sa, "load_config", lambda: cfg)
     monkeypatch.setattr(
@@ -87,6 +88,9 @@ def test_search_actor_return_emb(monkeypatch, tmp_path):
     results = sa.search_actor(str(img_path), k=1, return_emb=True)
     assert "embedding" in results
     assert callable(results["search_func"])
+    metadata = results.get("metadata")
+    assert isinstance(metadata, dict)
+    assert metadata.get("is_similarity_index") is True
     matches = results["search_func"](np.asarray([results["embedding"]], dtype=np.float32))
 
     assert "0" in matches

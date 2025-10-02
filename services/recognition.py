@@ -205,14 +205,25 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
 
     cfg = load_config()
     search_cfg = cfg.get("search", {})
+    index_cfg = cfg.get("index", {}) if isinstance(cfg, dict) else {}
+    index_type = str(index_cfg.get("type", "")).lower()
+    metric_hint = str(index_cfg.get("metric", "")).lower()
+    if not index_type and metric_hint:
+        index_type = metric_hint
+    is_similarity_index = "ip" in index_type or "cos" in index_type
     recognition_cfg = get_recognition_settings(cfg)
     present_threshold = _as_float(
         search_cfg.get("present_threshold", search_cfg.get("threshold", 0.5)), 0.5
     )
     near_match_threshold = _as_float(recognition_cfg.get("SIM_THRESHOLD"), 0.3)
-    min_score = _as_float(
+    min_score_cfg = _as_float(
         search_cfg.get("min_score", near_match_threshold), near_match_threshold
     )
+    if is_similarity_index:
+        min_score = min_score_cfg
+    else:
+        near_match_threshold = max(near_match_threshold, present_threshold)
+        min_score = max(min_score_cfg, near_match_threshold)
 
     max_results_cfg = _as_int(
         search_cfg.get("max_results", search_cfg.get("top_k", 50)), 50
@@ -229,7 +240,7 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
     if not matches_by_movie:
         return {"is_unknown": True, "movies": []}
 
-    best_score = 0.0
+    best_score: float | None = None
     movies_by_status: Dict[str, Dict[str, Any]] = {"present": {}, "near_match": {}}
 
     for movie_id, candidates in matches_by_movie.items():
@@ -241,10 +252,14 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
                 continue
 
             score = _as_float(candidate.get("distance"), 0.0)
-            if score < near_match_threshold:
-                continue
-
-            status = "present" if score >= present_threshold else "near_match"
+            if is_similarity_index:
+                if score < near_match_threshold:
+                    continue
+                status = "present" if score >= present_threshold else "near_match"
+            else:
+                if score > near_match_threshold:
+                    continue
+                status = "present" if score <= present_threshold else "near_match"
             label = PRESENT_LABEL_VI if status == "present" else NEAR_MATCH_LABEL_VI
 
             movie_key = str(movie_id)
@@ -319,7 +334,12 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
 
             if formatted_character["character_id"]:
                 movie_entry["characters"].append(formatted_character)
-                best_score = max(best_score, score)
+                if best_score is None:
+                    best_score = score
+                elif is_similarity_index:
+                    best_score = max(best_score, score)
+                else:
+                    best_score = min(best_score, score)
 
     selected_status = "present" if movies_by_status["present"] else "near_match"
     selected_movies_map = movies_by_status[selected_status]
@@ -332,7 +352,9 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
         characters = movie_entry.get("characters", [])
         if not characters:
             continue
-        characters.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+        characters.sort(
+            key=lambda item: item.get("score", 0.0), reverse=is_similarity_index
+        )
         movie_payload = {
             "movie_id": movie_entry.get("movie_id"),
             "movie": movie_entry.get("movie"),
@@ -346,12 +368,21 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
     if not movies:
         return {"is_unknown": True, "movies": []}
 
-    movies.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+    movies.sort(
+        key=lambda item: item.get("score", 0.0), reverse=is_similarity_index
+    )
 
-    is_unknown = best_score < present_threshold
+    if best_score is None:
+        return {"is_unknown": True, "movies": []}
+
+    if is_similarity_index:
+        is_unknown = best_score < present_threshold
+    else:
+        is_unknown = best_score > present_threshold
 
     return {
         "is_unknown": is_unknown,
         "best_score": best_score,
+        "is_similarity_index": is_similarity_index,
         "movies": movies,
     }

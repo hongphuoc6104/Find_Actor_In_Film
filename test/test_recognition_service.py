@@ -89,7 +89,8 @@ def configured_thresholds(monkeypatch):
             "near_match_threshold": 0.3,
             "min_score": 0.3,
             "max_results": 10,
-        }
+        },
+        "index": {"type": "ip"},
     }
     monkeypatch.setattr(recognition, "load_config", lambda: cfg)
     return cfg
@@ -156,44 +157,128 @@ def test_recognize_uses_near_match_when_no_present(monkeypatch, configured_thres
         for char in movie["characters"]
     )
 
-    def test_recognize_merges_highlight_scenes(monkeypatch, configured_thresholds):
-        monkeypatch.setattr(recognition, "_HIGHLIGHT_LIMIT", None)
+def test_recognize_merges_highlight_scenes(monkeypatch, configured_thresholds):
+    monkeypatch.setattr(recognition, "_HIGHLIGHT_LIMIT", None)
 
-        highlight_scene = {
-            "scene_index": 5,
-            "highlights": [
-                {"start": 1.0, "end": 2.5},
-                {"start": 6.0, "end": 8.0, "duration": 1.5},
+    highlight_scene = {
+        "scene_index": 5,
+        "highlights": [
+            {"start": 1.0, "end": 2.5},
+            {"start": 6.0, "end": 8.0, "duration": 1.5},
+        ],
+    }
+    candidate = _build_candidate(0.64, scenes=[highlight_scene])
+
+    def fake_search(image_path: str, k: int, score_floor: float, max_results: int):
+        return {"movie": [candidate]}
+
+    monkeypatch.setattr(recognition, "search_actor", fake_search)
+
+    result = recognition.recognize("/tmp/image.jpg")
+
+    movie = result["movies"][0]
+    char = movie["characters"][0]
+
+    assert char["total_scenes"] == 1
+    assert char["next_scene_cursor"] is None
+    assert char["has_more_scenes"] is False
+    assert char["highlight_total"] == 1
+    assert isinstance(char.get("scenes"), list) and len(char["scenes"]) == 1
+
+    scene = char["scene"]
+    assert scene["highlight_total"] == 1
+    assert scene["highlight_index"] == 0
+    assert scene["scene_index"] == 0
+    assert scene["source_scene_index"] == 5
+
+    highlight = scene["highlights"][0]
+    assert highlight["start"] == pytest.approx(1.0)
+    assert highlight["end"] == pytest.approx(8.0)
+    assert highlight["duration"] == pytest.approx(7.0)
+    assert highlight["match_count"] == 2
+    assert highlight["similarity_percent"] == pytest.approx(0.0)
+    assert isinstance(highlight.get("sources"), list)
+
+
+def test_recognize_similarity_orders_movies_and_characters(
+        monkeypatch, configured_thresholds
+):
+    def fake_search(image_path: str, k: int, score_floor: float, max_results: int):
+        assert configured_thresholds["index"]["type"] == "ip"
+        return {
+            "1": [
+                _build_candidate(0.92, movie="Movie A", character_id="alpha"),
+                _build_candidate(0.81, movie="Movie A", character_id="beta"),
+                _build_candidate(0.34, movie="Movie A", character_id="ignored"),
+
             ],
+            "2": [
+                _build_candidate(0.87, movie="Movie B", character_id="gamma"),
+                _build_candidate(0.62, movie="Movie B", character_id="delta"),
+            ],
+            "3": [_build_candidate(0.21, movie="Movie C", character_id="zeta")],
         }
-        candidate = _build_candidate(0.64, scenes=[highlight_scene])
 
-        def fake_search(image_path: str, k: int, score_floor: float, max_results: int):
-            return {"movie": [candidate]}
+    monkeypatch.setattr(recognition, "search_actor", fake_search)
 
-        monkeypatch.setattr(recognition, "search_actor", fake_search)
+    result = recognition.recognize("/tmp/image.jpg")
 
-        result = recognition.recognize("/tmp/image.jpg")
+    assert result["is_unknown"] is False
+    assert result["best_score"] == pytest.approx(0.92)
+    assert result["is_similarity_index"] is True
+    movie_titles = [movie["movie"] for movie in result["movies"]]
+    assert movie_titles == ["Movie A", "Movie B"]
 
-        movie = result["movies"][0]
-        char = movie["characters"][0]
+    for movie in result["movies"]:
+        characters = movie["characters"]
+        assert characters
+        sorted_scores = [char["score"] for char in characters]
+        assert sorted_scores == sorted(sorted_scores, reverse=True)
+        assert all(char["match_status"] == "present" for char in characters)
 
-        assert char["total_scenes"] == 1
-        assert char["next_scene_cursor"] is None
-        assert char["has_more_scenes"] is False
-        assert char["highlight_total"] == 1
-        assert isinstance(char.get("scenes"), list) and len(char["scenes"]) == 1
 
-        scene = char["scene"]
-        assert scene["highlight_total"] == 1
-        assert scene["highlight_index"] == 0
-        assert scene["scene_index"] == 0
-        assert scene["source_scene_index"] == 5
+def test_recognize_distance_thresholds_and_order(monkeypatch):
+    cfg = {
+        "search": {
+            "present_threshold": 0.4,
+            "near_match_threshold": 0.6,
+            "min_score": 0.2,
+            "max_results": 5,
+        },
+        "recognition": {"SIM_THRESHOLD": 0.6},
+        "index": {"type": "l2"},
+    }
 
-        highlight = scene["highlights"][0]
-        assert highlight["start"] == pytest.approx(1.0)
-        assert highlight["end"] == pytest.approx(8.0)
-        assert highlight["duration"] == pytest.approx(7.0)
-        assert highlight["match_count"] == 2
-        assert highlight["similarity_percent"] == pytest.approx(0.0)
-        assert isinstance(highlight.get("sources"), list)
+    monkeypatch.setattr(recognition, "load_config", lambda: cfg)
+
+    def fake_search(image_path: str, k: int, score_floor: float, max_results: int):
+        # For distance metrics the service should request scores within the
+        # relaxed near-match radius (<= 0.6 in this test case).
+        assert score_floor == pytest.approx(0.6)
+        assert max_results == 5
+        return {
+            "1": [
+                _build_candidate(0.45, movie="Movie A", character_id="alpha"),
+                _build_candidate(0.55, movie="Movie A", character_id="beta"),
+            ],
+            "2": [_build_candidate(0.5, movie="Movie B", character_id="gamma")],
+            "3": [_build_candidate(0.72, movie="Movie C", character_id="delta")],
+        }
+
+    monkeypatch.setattr(recognition, "search_actor", fake_search)
+
+    result = recognition.recognize("/tmp/image.jpg")
+
+    assert result["is_similarity_index"] is False
+    assert result["best_score"] == pytest.approx(0.45)
+    assert result["is_unknown"] is True
+
+    movie_titles = [movie["movie"] for movie in result["movies"]]
+    assert movie_titles == ["Movie A", "Movie B"]
+
+    for movie in result["movies"]:
+        characters = movie["characters"]
+        assert characters
+        sorted_scores = [char["score"] for char in characters]
+        assert sorted_scores == sorted(sorted_scores)
+        assert all(char["match_status"] == "near_match" for char in characters)

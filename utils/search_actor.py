@@ -52,6 +52,9 @@ def search_actor(
 
     index, id_map = load_index()
     index_type = str(index_cfg.get("type", "")).lower()
+    metric_hint = str(index_cfg.get("metric", "")).lower()
+    if not index_type and metric_hint:
+        index_type = metric_hint
     is_similarity_index = "ip" in index_type or "cos" in index_type
 
     default_floor = float(search_cfg.get("min_score", 0.0))
@@ -227,6 +230,10 @@ def search_actor(
         return {
             "embedding": emb[0].tolist(),
             "search_func": _search_func,
+            "metadata": {
+                "index_type": index_type,
+                "is_similarity_index": is_similarity_index,
+            },
         }
 
     return _search_func(
