@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from services.recognition import recognize
 from utils.config_loader import get_highlight_settings, load_config
-from utils.highlights import expand_highlight_scenes
+from utils.highlights import normalise_highlights
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRAMES_ROUTE = "/frames"
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 _HIGHLIGHT_SETTINGS = get_highlight_settings()
 _HIGHLIGHT_LIMIT = _HIGHLIGHT_SETTINGS["TOP_K_HL_PER_SCENE"]
-
+_MERGE_GAP = float(_HIGHLIGHT_SETTINGS["MERGE_GAP_SEC"])
 
 def _resolve_frames_root() -> Path | None:
     """Return the absolute path configured for extracted frames."""
@@ -548,131 +548,117 @@ def _convert_scene_entry(
                 converted["timeline"].append(item)
 
     # --- Highlights ---
-    highlights = converted.get("highlights")
-    if isinstance(highlights, list):
-        normalized = []
-        for h in highlights:
-            if not isinstance(h, dict):
-                continue
-            start = _parse_float(h.get("start"))
-            end = _parse_float(h.get("end"))
-            if start is None or end is None:
-                continue
-            entry: Dict[str, Any] = dict(h)
+            scene_start = (
+                    _parse_float(converted.get("video_start_timestamp"))
+                    or _parse_float(converted.get("start_time"))
+                    or _parse_float(converted.get("clip_start_timestamp"))
+            )
+            scene_end = (
+                    _parse_float(converted.get("video_end_timestamp"))
+                    or _parse_float(converted.get("end_time"))
+                    or _parse_float(converted.get("clip_end_timestamp"))
+            )
+            highlights = normalise_highlights(
+                converted.get("highlights"),
+                highlight_limit=_HIGHLIGHT_LIMIT,
+                merge_gap=_MERGE_GAP,
+                scene_start=scene_start,
+                scene_end=scene_end,
+                logger=logger,
+                scene_identifier={
+                    "scene": converted.get("scene_index"),
+                    "movie": movie,
+                    "character": movie_id,
+                },
+            )
+    normalized: List[Dict[str, Any]] = []
+    for h in highlights or []:
+        if not isinstance(h, dict):
+            continue
+        entry: Dict[str, Any] = dict(h)
 
-            support_meta = h.get("highlight_support")
-            if isinstance(support_meta, dict):
-                support_copy: Dict[str, Any] = {}
-                for key, value in support_meta.items():
-                    if key in {
-                        "det_score_threshold",
-                        "similarity_threshold",
-                        "min_similarity",
-                        "max_similarity",
-                        "avg_similarity",
-                        "min_det_score",
-                        "max_det_score",
-                        "min_duration",
-                        "min_score",
-                    }:
-                        parsed = _parse_float(value)
-                        if parsed is not None:
-                            support_copy[key] = parsed
-                        continue
-                    support_copy[key] = value
-                if support_copy:
-                    entry["highlight_support"] = support_copy
+        clusters = h.get("matched_cluster_ids")
+        if isinstance(clusters, list):
+            entry["matched_cluster_ids"] = [
+                str(c)
+                for c in clusters
+                if c is not None and str(c)
+            ]
 
-            max_det_score = _parse_float(h.get("max_det_score"))
-            if max_det_score is not None:
-                entry["max_det_score"] = max_det_score
-                entry.setdefault("max_score", max_det_score)
-            min_det_score = _parse_float(h.get("min_det_score"))
-            if min_det_score is not None:
-                entry["min_det_score"] = min_det_score
+        final_ids = h.get("matched_final_character_ids")
+        if isinstance(final_ids, list):
+            entry["matched_final_character_ids"] = [
+                str(c)
+                for c in final_ids
+                if c is not None and str(c)
+            ]
 
-            for key in ("avg_similarity", "max_similarity", "min_similarity"):
-                value = _parse_float(h.get(key))
-                if value is not None:
-                    entry[key] = value
+        detections = h.get("supporting_detections")
+        if isinstance(detections, list):
+            support_entries = []
+            for det in detections:
+                if not isinstance(det, dict):
+                    continue
+                det_entry: Dict[str, Any] = {}
+                timestamp = _parse_float(det.get("timestamp"))
+                if timestamp is not None:
+                    det_entry["timestamp"] = timestamp
+                det_score = _parse_float(det.get("det_score"))
+                if det_score is not None:
+                    det_entry["det_score"] = det_score
+                actor_similarity = _parse_float(det.get("actor_similarity"))
+                if actor_similarity is not None:
+                    det_entry["actor_similarity"] = actor_similarity
+                for key in ("frame", "frame_index", "order", "track_id"):
+                    value = det.get(key)
+                    if value is not None:
+                        det_entry[key] = value
+                det_clusters = det.get("cluster_ids")
+                if isinstance(det_clusters, list):
+                    det_entry["cluster_ids"] = [
+                        str(c)
+                        for c in det_clusters
+                        if c is not None and str(c)
+                    ]
+                det_final_ids = det.get("final_character_ids")
+                if isinstance(det_final_ids, list):
+                    det_entry["final_character_ids"] = [
+                        str(c)
+                        for c in det_final_ids
+                        if c is not None and str(c)
+                    ]
+                for identity_key in (
+                    "character_id",
+                    "final_character_id",
+                    "scene_final_character_id",
+                ):
+                    value = det.get(identity_key)
+                    if value is not None:
+                        det_entry[identity_key] = str(value)
+                if det_entry:
+                    support_entries.append(det_entry)
+            if support_entries:
+                entry["supporting_detections"] = support_entries
+        normalized.append(entry)
 
-            match_count = h.get("match_count")
-            if isinstance(match_count, (int, float)):
-                entry["match_count"] = int(match_count)
+    converted["highlights"] = normalized
+    highlight_total = len(normalized)
+    converted["highlight_total"] = highlight_total
+    if converted.get("highlight_index") is None:
+        converted["highlight_index"] = 0 if highlight_total else None
+    converted.setdefault("highlight_merge_gap", _MERGE_GAP)
 
-            clusters = h.get("matched_cluster_ids")
-            if isinstance(clusters, list):
-                entry["matched_cluster_ids"] = [
-                    str(c)
-                    for c in clusters
-                    if c is not None and str(c)
-                ]
-
-            final_ids = h.get("matched_final_character_ids")
-            if isinstance(final_ids, list):
-                entry["matched_final_character_ids"] = [
-                    str(c)
-                    for c in final_ids
-                    if c is not None and str(c)
-                ]
-
-            detections = h.get("supporting_detections")
-            if isinstance(detections, list):
-                support_entries = []
-                for det in detections:
-                    if not isinstance(det, dict):
-                        continue
-                    det_entry: Dict[str, Any] = {}
-                    timestamp = _parse_float(det.get("timestamp"))
-                    if timestamp is not None:
-                        det_entry["timestamp"] = timestamp
-                    det_score = _parse_float(det.get("det_score"))
-                    if det_score is not None:
-                        det_entry["det_score"] = det_score
-                    actor_similarity = _parse_float(det.get("actor_similarity"))
-                    if actor_similarity is not None:
-                        det_entry["actor_similarity"] = actor_similarity
-                    for key in ("frame", "frame_index", "order", "track_id"):
-                        value = det.get(key)
-                        if value is not None:
-                            det_entry[key] = value
-                    det_clusters = det.get("cluster_ids")
-                    if isinstance(det_clusters, list):
-                        det_entry["cluster_ids"] = [
-                            str(c)
-                            for c in det_clusters
-                            if c is not None and str(c)
-                        ]
-                    det_final_ids = det.get("final_character_ids")
-                    if isinstance(det_final_ids, list):
-                        det_entry["final_character_ids"] = [
-                            str(c)
-                            for c in det_final_ids
-                            if c is not None and str(c)
-                        ]
-                    for identity_key in (
-                        "character_id",
-                        "final_character_id",
-                        "scene_final_character_id",
-                    ):
-                        value = det.get(identity_key)
-                        if value is not None:
-                            det_entry[identity_key] = str(value)
-                    if det_entry:
-                        support_entries.append(det_entry)
-                if support_entries:
-                    entry["supporting_detections"] = support_entries
-            normalized.append(entry)
-        converted["highlights"] = normalized
-        highlights = normalized
-
-    if not isinstance(highlights, list):
-        highlights = []
-        converted["highlights"] = highlights
-
-    if "highlight_total" not in converted or converted.get("highlight_total") is None:
-        converted["highlight_total"] = len(highlights)
-
+    try:
+        logger.debug(
+            "DEBUG_HL api scene converted",
+            extra={
+                "scene": converted.get("scene_index"),
+                "highlight_total": highlight_total,
+                "movie": movie,
+            },
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        pass
     support_meta = converted.get("highlight_support")
     if isinstance(support_meta, dict):
         support_copy: Dict[str, Any] = {}
@@ -718,15 +704,116 @@ def _build_scene_entries(character: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Return a list of scene entries, falling back when highlights are absent."""
 
     raw_scenes = character.get("scenes")
-    expanded = expand_highlight_scenes(raw_scenes, highlight_limit=_HIGHLIGHT_LIMIT)
-    if expanded:
-        return expanded
+    prepared: List[Dict[str, Any]] = []
+    fallback_scenes: List[Dict[str, Any]] = []
+
+    if isinstance(raw_scenes, list):
+        for idx, scene in enumerate(raw_scenes):
+            if not isinstance(scene, dict):
+                continue
+            scene_copy = dict(scene)
+
+            scene_start = (
+                _parse_float(scene_copy.get("video_start_timestamp"))
+                or _parse_float(scene_copy.get("start_time"))
+                or _parse_float(scene_copy.get("clip_start_timestamp"))
+            )
+            scene_end = (
+                _parse_float(scene_copy.get("video_end_timestamp"))
+                or _parse_float(scene_copy.get("end_time"))
+                or _parse_float(scene_copy.get("clip_end_timestamp"))
+            )
+
+            highlights = normalise_highlights(
+                scene_copy.get("highlights"),
+                highlight_limit=_HIGHLIGHT_LIMIT,
+                merge_gap=_MERGE_GAP,
+                scene_start=scene_start,
+                scene_end=scene_end,
+                logger=logger,
+                scene_identifier={
+                    "scene": scene_copy.get("scene_index", idx),
+                    "movie": character.get("movie"),
+                    "character": character.get("character_id"),
+                },
+            )
+            scene_copy["highlights"] = highlights
+            highlight_total = len(highlights)
+            scene_copy["highlight_total"] = highlight_total
+            scene_copy.setdefault("highlight_merge_gap", _MERGE_GAP)
+
+            raw_scene_index = scene_copy.get("scene_index")
+            try:
+                source_scene_index = int(raw_scene_index)
+            except (TypeError, ValueError):
+                source_scene_index = idx
+            scene_copy["scene_index"] = source_scene_index
+            scene_copy["source_scene_index"] = source_scene_index
+
+            try:
+                logger.debug(
+                    "DEBUG_HL api scene prepared",
+                    extra={
+                        "scene": source_scene_index,
+                        "highlight_total": highlight_total,
+                        "movie": character.get("movie"),
+                    },
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                pass
+
+            if highlight_total:
+                for highlight_index in range(highlight_total):
+                    scene_variant = dict(scene_copy)
+                    scene_variant["highlight_index"] = highlight_index
+                    scene_variant["highlight_total"] = highlight_total
+                    scene_variant["scene_index"] = len(prepared)
+                    scene_variant["source_scene_index"] = source_scene_index
+                    highlight = highlights[highlight_index]
+                    if isinstance(highlight, dict):
+                        start = _parse_float(highlight.get("start"))
+                        end = _parse_float(highlight.get("end"))
+                        duration = _parse_float(highlight.get("duration"))
+                        if start is not None:
+                            scene_variant["start_time"] = start
+                            scene_variant["video_start_timestamp"] = start
+                            scene_variant["clip_start_timestamp"] = start
+                        if end is not None:
+                            scene_variant["end_time"] = end
+                            scene_variant["video_end_timestamp"] = end
+                            scene_variant["clip_end_timestamp"] = end
+                        if duration is not None:
+                            scene_variant["duration"] = duration
+                    prepared.append(scene_variant)
+            else:
+                fallback_scene = dict(scene_copy)
+                fallback_scene["highlight_index"] = None
+                fallback_scene["highlight_total"] = 0
+                fallback_scene["scene_index"] = len(fallback_scenes)
+                fallback_scene["source_scene_index"] = source_scene_index
+                fallback_scenes.append(fallback_scene)
+
+    if prepared:
+        return prepared
+    if fallback_scenes:
+        return fallback_scenes
 
     def _coerce_scene(value: Any) -> Dict[str, Any] | None:
         if isinstance(value, dict):
-            return dict(value)
+            scene_copy = dict(value)
+            scene_copy.setdefault("highlights", [])
+            scene_copy.setdefault("highlight_total", 0)
+            scene_copy.setdefault("highlight_index", None)
+            scene_copy.setdefault("highlight_merge_gap", _MERGE_GAP)
+            return scene_copy
         if isinstance(value, str) and value:
-            return {"frame": value}
+            return {
+                "frame": value,
+                "highlights": [],
+                "highlight_total": 0,
+                "highlight_index": None,
+                "highlight_merge_gap": _MERGE_GAP,
+            }
         return None
 
     def _normalise_scene(scene: Dict[str, Any], fallback_index: int) -> Dict[str, Any]:
@@ -741,6 +828,7 @@ def _build_scene_entries(character: Dict[str, Any]) -> List[Dict[str, Any]]:
         scene_copy.setdefault("highlights", [])
         scene_copy.setdefault("highlight_total", 0)
         scene_copy.setdefault("highlight_index", None)
+        scene_copy.setdefault("highlight_merge_gap", _MERGE_GAP)
         return scene_copy
 
     fallback: List[Dict[str, Any]] = []

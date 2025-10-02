@@ -156,7 +156,7 @@ def test_recognize_uses_near_match_when_no_present(monkeypatch, configured_thres
         for char in movie["characters"]
     )
 
-    def test_recognize_flattens_highlight_scenes(monkeypatch, configured_thresholds):
+    def test_recognize_merges_highlight_scenes(monkeypatch, configured_thresholds):
         monkeypatch.setattr(recognition, "_HIGHLIGHT_LIMIT", None)
 
         highlight_scene = {
@@ -178,17 +178,22 @@ def test_recognize_uses_near_match_when_no_present(monkeypatch, configured_thres
         movie = result["movies"][0]
         char = movie["characters"][0]
 
-        assert char["total_scenes"] == 2
-        assert char["next_scene_cursor"] == 1
-        assert char["has_more_scenes"] is True
+        assert char["total_scenes"] == 1
+        assert char["next_scene_cursor"] is None
+        assert char["has_more_scenes"] is False
+        assert char["highlight_total"] == 1
+        assert isinstance(char.get("scenes"), list) and len(char["scenes"]) == 1
 
         scene = char["scene"]
-        assert scene["highlight_total"] == 2
+        assert scene["highlight_total"] == 1
         assert scene["highlight_index"] == 0
         assert scene["scene_index"] == 0
         assert scene["source_scene_index"] == 5
 
         highlight = scene["highlights"][0]
         assert highlight["start"] == pytest.approx(1.0)
-        assert highlight["end"] == pytest.approx(2.5)
-        assert highlight["duration"] == pytest.approx(1.5)
+        assert highlight["end"] == pytest.approx(8.0)
+        assert highlight["duration"] == pytest.approx(7.0)
+        assert highlight["match_count"] == 2
+        assert highlight["similarity_percent"] == pytest.approx(0.0)
+        assert isinstance(highlight.get("sources"), list)

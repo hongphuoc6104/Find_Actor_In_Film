@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
+
 import os
 import re
 from pathlib import Path
@@ -17,7 +19,7 @@ from utils.config_loader import get_highlight_settings, load_config
 from utils.indexer import build_index
 from utils.vector_utils import _mean_vector, l2_normalize
 from tasks.filter_clusters_task import filter_clusters_task
-
+from utils.highlights import normalise_highlights
 
 DEFAULT_CLIP_FPS = 8.0
 MIN_CLIP_DURATION = 5.0
@@ -26,6 +28,7 @@ PRE_CLIP_BUFFER_SECONDS = 1.0
 POST_CLIP_BUFFER_SECONDS = 1.0
 DEFAULT_FRAME_EXTENSIONS = [".jpg", ".jpeg", ".png"]
 _HIGHLIGHT_SETTINGS = get_highlight_settings()
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_HIGHLIGHT_DET_SCORE = float(_HIGHLIGHT_SETTINGS["MIN_SCORE"])
 DEFAULT_HIGHLIGHT_GAP_SECONDS = float(_HIGHLIGHT_SETTINGS["MERGE_GAP_SEC"])
@@ -1532,6 +1535,21 @@ def character_task():
                             highlights, TOP_HIGHLIGHTS_PER_SCENE
                         )
 
+                        normalised_highlights = normalise_highlights(
+                            highlights,
+                            merge_gap=float(highlight_gap_seconds),
+                            scene_start=start_timestamp,
+                            scene_end=end_timestamp,
+                            highlight_limit=None,
+                            logger=LOGGER,
+                            scene_identifier={
+                                "movie": movie_name,
+                                "track": track_key,
+                                "order": order_idx,
+                            },
+                        )
+                        highlights = normalised_highlights
+
 
                         highlight_support = _summarise_highlight_support(
                             highlights,
@@ -1694,6 +1712,11 @@ def character_task():
                             "end_time": end_timestamp,
                         }
                         scene_entry["highlights"] = highlights
+                        scene_entry["highlight_total"] = len(highlights)
+                        scene_entry["highlight_index"] = 0 if highlights else None
+                        scene_entry["highlight_merge_gap"] = float(
+                            highlight_gap_seconds
+                        )
                         scene_entry["highlight_support"] = highlight_support
                         scene_entry["highlight_det_score_threshold"] = float(
                             highlight_det_threshold

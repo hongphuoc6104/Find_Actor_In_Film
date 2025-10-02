@@ -62,7 +62,7 @@ def get_highlight_settings(config: Dict[str, Any] | None = None) -> Dict[str, An
     if "min_duration" in highlight_cfg:
         min_duration = _to_float(highlight_cfg.get("min_duration"), min_duration)
 
-    merge_gap = _to_float(highlight_cfg.get("MERGE_GAP_SEC"), 2.0)
+    merge_gap = _to_float(highlight_cfg.get("MERGE_GAP_SEC"), 6.0)
     if "max_gap_seconds" in highlight_cfg:
         merge_gap = _to_float(highlight_cfg.get("max_gap_seconds"), merge_gap)
 

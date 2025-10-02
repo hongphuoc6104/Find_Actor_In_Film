@@ -9,7 +9,7 @@ def test_highlight_settings_defaults(monkeypatch):
     settings = config_loader.get_highlight_settings()
 
     assert settings["MIN_HL_DURATION_SEC"] == pytest.approx(4.0)
-    assert settings["MERGE_GAP_SEC"] == pytest.approx(2.0)
+    assert settings["MERGE_GAP_SEC"] == pytest.approx(6.0)
     assert settings["MIN_SCORE"] == pytest.approx(0.8)
     assert settings["TOP_K_HL_PER_SCENE"] is None
     assert settings["SIM_THRESHOLD"] == pytest.approx(0.3)

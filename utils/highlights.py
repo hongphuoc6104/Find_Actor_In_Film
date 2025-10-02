@@ -1,9 +1,12 @@
 """Shared utilities for working with highlight scene metadata."""
-
 from __future__ import annotations
+import logging
 
 import math
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Sequence
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _parse_float(value: Any) -> float | None:
@@ -65,102 +68,266 @@ def _select_top_highlights(
     return [dict(item) for item in top]
 
 
-def expand_highlight_scenes(
-    raw_scenes: Any, *, highlight_limit: int | None
+def _collect_numbers(entries: Iterable[Any]) -> List[float]:
+    values: List[float] = []
+    for entry in entries:
+        parsed = _parse_float(entry)
+        if parsed is not None:
+            values.append(parsed)
+    return values
+
+
+def _max_or_none(values: Sequence[float]) -> float | None:
+    return max(values) if values else None
+
+
+def _min_or_none(values: Sequence[float]) -> float | None:
+    return min(values) if values else None
+
+
+def normalise_highlights(
+    highlights: Any,
+    *,
+    highlight_limit: int | None = None,
+    merge_gap: float | None = None,
+    scene_start: float | None = None,
+    scene_end: float | None = None,
+    logger: logging.Logger | None = None,
+    scene_identifier: Any | None = None,
 ) -> List[Dict[str, Any]]:
-    """Flatten highlight intervals into cursorable scene entries.
+    """Coalesce highlight entries and annotate similarity metadata.
+
 
     Parameters
     ----------
-    raw_scenes:
-        The raw ``scenes`` collection attached to a character payload. Each
-        scene may contain a ``highlights`` list describing sub-intervals within
-        the scene.
+    highlights:
+        Raw highlight payload from metadata. Non-dict entries are ignored.
     highlight_limit:
-        Maximum number of highlight intervals to retain per scene. ``None``
-        keeps all highlight entries.
-
-    Returns
-    -------
-    list of dict
-        A list where each entry corresponds to a highlight interval, augmented
-        with cursor metadata so the API layer can page through highlights as if
-        they were standalone scenes.
+        Maximum number of highlights to keep before merging. ``None`` keeps all
+        entries.
+    merge_gap:
+        Maximum gap (seconds) between segments for them to be merged.
+    scene_start, scene_end:
+        Bounds used when padding isolated highlights.
+    logger:
+        Optional logger used for ``DEBUG_HL`` telemetry. Defaults to the module
+        logger.
+    scene_identifier:
+        Identifier included in debug logs for easier traceability.
     """
 
-    if not isinstance(raw_scenes, list):
+    if not isinstance(highlights, list) or not highlights:
         return []
 
-    expanded: List[Dict[str, Any]] = []
+    effective_logger = logger or LOGGER
+    selected = _select_top_highlights(highlights, highlight_limit)
+    prepared_segments: List[Dict[str, Any]] = []
 
-    for source_index, scene in enumerate(raw_scenes):
-        if not isinstance(scene, dict):
+    merge_gap_value = 0.0
+    if merge_gap is not None:
+        merge_gap_value = max(float(merge_gap), 0.0)
+
+    start_bound = _parse_float(scene_start)
+    end_bound = _parse_float(scene_end)
+
+    for index, raw_highlight in enumerate(selected):
+        start = _parse_float(raw_highlight.get("start"))
+        end = _parse_float(raw_highlight.get("end"))
+        if start is None or end is None:
             continue
 
-        highlights = scene.get("highlights")
-        if not isinstance(highlights, list) or not highlights:
-            continue
+            if end < start:
+                start, end = end, start
 
-        raw_scene_index = scene.get("scene_index")
-        source_scene_index: int | None = None
-        if isinstance(raw_scene_index, int):
-            source_scene_index = raw_scene_index
-        else:
-            try:
-                source_scene_index = int(raw_scene_index)
-            except (TypeError, ValueError):
-                source_scene_index = None
+            highlight_copy = dict(raw_highlight)
+            match_count = _parse_int(highlight_copy.get("match_count"))
+            if match_count is None or match_count <= 0:
+                match_count = 1
 
-        if source_scene_index is None:
-            source_scene_index = source_index
+            duration = _parse_float(highlight_copy.get("duration"))
+            if duration is None:
+                duration = max(end - start, 0.0)
 
-        ranked_highlights = _select_top_highlights(highlights, highlight_limit)
+            # Pad isolated hits shorter than 1s by +/-2s within scene bounds.
+            if match_count <= 1 and duration < 1.0:
+                pad_seconds = 2.0
+                if start_bound is not None:
+                    start = max(start - pad_seconds, start_bound)
+                else:
+                    start -= pad_seconds
+                if end_bound is not None:
+                    end = min(end + pad_seconds, end_bound)
+                else:
+                    end += pad_seconds
+                if end < start:
+                    end = start
+                duration = max(end - start, 0.0)
 
-        valid_highlights: List[Dict[str, Any]] = []
-        for highlight in ranked_highlights:
-            start = _parse_float(highlight.get("start"))
-            end = _parse_float(highlight.get("end"))
-            if start is None or end is None or end < start:
-                continue
-            highlight_copy = dict(highlight)
-            highlight_copy["start"] = start
-            highlight_copy["end"] = end
-            valid_highlights.append(highlight_copy)
+            highlight_copy["start"] = round(start, 3)
+            highlight_copy["end"] = round(end, 3)
+            highlight_copy["duration"] = round(duration, 3)
+            highlight_copy["match_count"] = int(match_count)
 
-        if not valid_highlights:
-            continue
+            det_scores = []
+            for key in ("max_det_score", "min_det_score", "det_score"):
+                det_scores.extend(_collect_numbers([highlight_copy.get(key)]))
 
-        highlight_total = len(valid_highlights)
-        for highlight_index, highlight in enumerate(valid_highlights):
-            cursor_index = len(expanded)
-            scene_copy = dict(scene)
-            scene_copy["highlights"] = [highlight]
-            scene_copy["highlight_index"] = highlight_index
-            scene_copy["highlight_total"] = highlight_total
-            scene_copy["source_scene_index"] = source_scene_index
-            scene_copy["scene_index"] = cursor_index
-
-            highlight_start = highlight.get("start")
-            highlight_end = highlight.get("end")
-            highlight_duration = _parse_float(highlight.get("duration"))
-            if (
-                highlight_duration is None
-                and isinstance(highlight_start, (int, float))
-                and isinstance(highlight_end, (int, float))
+            similarity_candidates: List[float] = []
+            for key in (
+                    "score",
+                    "max_score",
+                    "avg_similarity",
+                    "max_similarity",
+                    "actor_similarity",
+                    "similarity",
             ):
-                highlight_duration = max(highlight_end - highlight_start, 0.0)
-                highlight["duration"] = highlight_duration
-            if isinstance(highlight_start, (int, float)):
-                scene_copy["start_time"] = float(highlight_start)
-                scene_copy["video_start_timestamp"] = float(highlight_start)
-                scene_copy["clip_start_timestamp"] = float(highlight_start)
-            if isinstance(highlight_end, (int, float)):
-                scene_copy["end_time"] = float(highlight_end)
-                scene_copy["video_end_timestamp"] = float(highlight_end)
-                scene_copy["clip_end_timestamp"] = float(highlight_end)
-            if isinstance(highlight_duration, (int, float)):
-                scene_copy["duration"] = float(highlight_duration)
+                similarity_candidates.extend(_collect_numbers([highlight_copy.get(key)]))
 
-            expanded.append(scene_copy)
+            prepared_segments.append(
+                {
+                    "start": float(highlight_copy["start"]),
+                    "end": float(highlight_copy["end"]),
+                    "match_count": int(match_count),
+                    "det_scores": det_scores,
+                    "similarities": similarity_candidates,
+                    "payload": highlight_copy,
+                    "index": index,
+                }
+            )
 
-    return expanded
+        if not prepared_segments:
+            return []
+
+        prepared_segments.sort(key=lambda item: (item["start"], item["end"], item["index"]))
+
+        merged_segments: List[Dict[str, Any]] = []
+        current: Dict[str, Any] | None = None
+
+        def _finalise(segment: Dict[str, Any]) -> Dict[str, Any]:
+            start_value = segment["start"]
+            end_value = segment["end"]
+            duration_value = max(end_value - start_value, 0.0)
+            det_scores = segment.get("det_scores", [])
+            similarities = segment.get("similarities", [])
+            sources = segment.get("sources", [])
+            total_match_count = int(segment.get("match_count", 0))
+
+            best_similarity = _max_or_none(similarities)
+            if best_similarity is None:
+                best_similarity = 0.0
+            similarity_percent = round(best_similarity * 100.0, 2)
+
+            merged_payload: Dict[str, Any] = {
+                "start": round(start_value, 3),
+                "end": round(end_value, 3),
+                "duration": round(duration_value, 3),
+                "match_count": total_match_count,
+                "sources": [
+                    {"raw": dict(source)}
+                    for source in sources
+                    if isinstance(source, dict)
+                ],
+            }
+
+            if det_scores:
+                merged_payload["max_det_score"] = max(det_scores)
+                merged_payload["min_det_score"] = min(det_scores)
+
+            merged_payload["score"] = float(best_similarity)
+            merged_payload["max_score"] = float(best_similarity)
+            if similarities:
+                merged_payload["max_similarity"] = max(similarities)
+                merged_payload["min_similarity"] = min(similarities)
+                merged_payload["avg_similarity"] = sum(similarities) / len(similarities)
+
+            merged_payload["similarity_percent"] = similarity_percent
+
+            # Merge union-able fields from sources
+            matched_clusters: set[str] = set()
+            matched_final_ids: set[str] = set()
+            supporting_detections: List[Any] = []
+            has_target = False
+
+            for source in sources:
+                clusters = source.get("matched_cluster_ids")
+                if isinstance(clusters, (list, set, tuple)):
+                    matched_clusters.update(str(c) for c in clusters if c is not None)
+                final_ids = source.get("matched_final_character_ids")
+                if isinstance(final_ids, (list, set, tuple)):
+                    matched_final_ids.update(str(c) for c in final_ids if c is not None)
+                detections = source.get("supporting_detections")
+                if isinstance(detections, list):
+                    supporting_detections.extend(
+                        det for det in detections if isinstance(det, dict)
+                    )
+                if source.get("has_target"):
+                    has_target = True
+
+            if matched_clusters:
+                merged_payload["matched_cluster_ids"] = sorted(matched_clusters)
+            if matched_final_ids:
+                merged_payload["matched_final_character_ids"] = sorted(matched_final_ids)
+            if supporting_detections:
+                merged_payload["supporting_detections"] = supporting_detections
+            if has_target:
+                merged_payload["has_target"] = True
+
+            return merged_payload
+
+        for segment in prepared_segments:
+            if current is None:
+                current = {
+                    "start": segment["start"],
+                    "end": segment["end"],
+                    "match_count": segment["match_count"],
+                    "det_scores": list(segment["det_scores"]),
+                    "similarities": list(segment["similarities"]),
+                    "sources": [segment["payload"]],
+                }
+            continue
+
+        gap = segment["start"] - current["end"]
+        if gap <= merge_gap_value:
+            current["end"] = max(current["end"], segment["end"])
+            current["match_count"] = int(current.get("match_count", 0)) + int(
+                segment["match_count"]
+            )
+            current.setdefault("det_scores", []).extend(segment["det_scores"])
+            current.setdefault("similarities", []).extend(segment["similarities"])
+            current.setdefault("sources", []).append(segment["payload"])
+        else:
+            merged_segments.append(_finalise(current))
+            current = {
+                "start": segment["start"],
+                "end": segment["end"],
+                "match_count": segment["match_count"],
+                "det_scores": list(segment["det_scores"]),
+                "similarities": list(segment["similarities"]),
+                "sources": [segment["payload"]],
+            }
+
+        if current is not None:
+            merged_segments.append(_finalise(current))
+
+        if merged_segments:
+            try:
+                effective_logger.debug(
+                    "DEBUG_HL normalise highlights",
+                    extra={
+                        "scene": scene_identifier,
+                        "merge_gap": merge_gap_value,
+                        "raw_count": len(prepared_segments),
+                        "merged_count": len(merged_segments),
+                        "raw": [
+                            (seg["start"], seg["end"])
+                            for seg in prepared_segments
+                        ],
+                        "merged": [
+                            (seg.get("start"), seg.get("end")) for seg in merged_segments
+                        ],
+                    },
+                )
+            except Exception:  # pragma: no cover - logging safety
+                pass
+
+    return merged_segments

@@ -327,11 +327,12 @@ def test_scene_endpoint_flattens_highlights(tmp_path, monkeypatch):
             assert scene["highlight_total"] == 2
             assert scene["source_scene_index"] == 4
             assert scene["scene_index"] == payload["scene_index"]
-            assert len(scene["highlights"]) == 1
+            assert len(scene["highlights"]) == 2
             first_highlight = scene["highlights"][0]
             assert first_highlight["start"] == 10.0
             assert first_highlight["end"] == 12.5
             assert first_highlight["duration"] == 2.5
+            assert "similarity_percent" in first_highlight
 
             second = client.post(
                 "/scene",
@@ -354,8 +355,8 @@ def test_scene_endpoint_flattens_highlights(tmp_path, monkeypatch):
             assert scene_two["source_scene_index"] == 4
             assert scene_two["scene_index"] == payload_two["scene_index"]
             assert isinstance(scene_two["highlights"], list)
-            assert len(scene_two["highlights"]) == 1
-            second_highlight = scene_two["highlights"][0]
+            assert len(scene_two["highlights"]) == 2
+            second_highlight = scene_two["highlights"][1]
             assert second_highlight["start"] == 20.0
             assert second_highlight["end"] == 24.0
             assert second_highlight["duration"] == 4.0
