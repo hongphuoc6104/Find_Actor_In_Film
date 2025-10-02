@@ -192,6 +192,12 @@ assert(
 )
 
 assert(
+  sceneViewerSource.includes("console.debug('DEBUG_HL SceneViewer playback'"),
+  'Scene viewer should emit DEBUG_HL logs for highlight playback decisions',
+)
+
+
+assert(
   !sceneViewerSource.includes('filtered_highlights') && !sceneViewerSource.includes('merged_highlights'),
   'Scene viewer should no longer reference client-side merged or filtered highlights',
 )
@@ -210,6 +216,12 @@ assert(
   sceneViewerSource.includes("console.debug('SceneViewer: no visible highlights rendered, falling back to raw data'") &&
     sceneViewerSource.includes('filterStats: stats'),
   'Scene viewer should log diagnostic statistics when falling back to raw highlights',
+)
+
+
+assert(
+  sceneViewerSource.includes('scene-viewer__next-button'),
+  'Scene viewer should expose a manual control for playing the next highlight once playback pauses',
 )
 
 

@@ -15,9 +15,14 @@ from utils.search_actor import search_actor
 from utils.highlights import normalise_highlights
 
 
+
+LOGGER = logging.getLogger(__name__)
+
+
+
 _HIGHLIGHT_SETTINGS = get_highlight_settings()
 _HIGHLIGHT_LIMIT = _HIGHLIGHT_SETTINGS["TOP_K_HL_PER_SCENE"]
-_HIGHLIGHT_LIMIT = _HIGHLIGHT_SETTINGS["TOP_K_HL_PER_SCENE"]
+_MERGE_GAP = float(_HIGHLIGHT_SETTINGS["MERGE_GAP_SEC"])
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:

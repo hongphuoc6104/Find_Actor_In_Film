@@ -68,6 +68,14 @@
               </div>
             </li>
           </ol>
+          <button
+            v-if="nextHighlightSegment"
+            type="button"
+            class="scene-viewer__next-button"
+            @click.stop="playNextHighlight"
+          >
+            Play next highlight
+          </button>
         </details>
       </aside>
     </div>
@@ -97,6 +105,19 @@ const videoRef = ref(null)
 const videoTime = ref(0)
 const pendingSeekTime = ref(null)
 const activeSegment = ref(null)
+const lastCompletedSegmentId = ref(null)
+const zeroHighlightLogKey = ref(null)
+
+const logHighlightDebug = (event, payload = {}) => {
+  if (typeof console === 'undefined' || typeof console.debug !== 'function') {
+    return
+  }
+  try {
+    console.debug('DEBUG_HL SceneViewer playback', { event, ...payload })
+  } catch (error) {
+    // Ignore logging errors
+  }
+}
 
 const parseIndexValue = (value) => {
   const parsed = Number(value)
@@ -260,6 +281,7 @@ const sceneStartTime = computed(() => {
 const resetImageSize = () => { imageSize.width = 0; imageSize.height = 0 }
 const resetVideoState = () => {
   activeSegment.value = availableHighlights.value[0] ?? null
+  lastCompletedSegmentId.value = null
   videoSize.width = parseDimension(props.scene?.width)
   videoSize.height = parseDimension(props.scene?.height)
   const safeStart = sceneStartTime.value ?? 0
@@ -296,15 +318,64 @@ watch(() => sceneVideo.value, () => { resetVideoState() })
 watch(availableHighlights, (segments) => {
   if (!segments.length) {
     activeSegment.value = null
+    lastCompletedSegmentId.value = null
     return
   }
   if (!activeSegment.value) {
     activeSegment.value = segments[0]
+    lastCompletedSegmentId.value = null
     return
   }
   const existing = segments.find((segment) => segment.id === activeSegment.value.id)
-  activeSegment.value = existing ?? segments[0]
+  if (existing) {
+    activeSegment.value = existing
+  } else {
+    activeSegment.value = segments[0]
+    lastCompletedSegmentId.value = null
+  }
 })
+
+watch(
+  () => availableHighlights.value.length,
+  (length) => {
+    if (!props.scene) {
+      return
+    }
+    if (length > 0) {
+      zeroHighlightLogKey.value = null
+      return
+    }
+    const rawHighlights = Array.isArray(props.scene.highlights)
+      ? props.scene.highlights
+      : []
+    const rawCount = rawHighlights.length
+    if (!rawCount) {
+      return
+    }
+    const sceneId = resolveSceneIdentifier(props.scene)
+    const stats = highlightStats.value
+    const key = `${sceneId ?? 'unknown'}::${rawCount}`
+    if (zeroHighlightLogKey.value === key) {
+      return
+    }
+    zeroHighlightLogKey.value = key
+    if (typeof console === 'undefined' || typeof console.debug !== 'function') {
+      return
+    }
+    try {
+      console.debug('SceneViewer: no visible highlights rendered, falling back to raw data', {
+        sceneId,
+        rawCount,
+        filteredCount: length,
+        filterStats: stats,
+      })
+    } catch (error) {
+      // Ignore logging errors
+    }
+  },
+  { immediate: true },
+)
+
 
 let lastHighlightIndex = null
 let lastHighlightTotal = null
@@ -400,9 +471,6 @@ const timelineSegments = computed(() => {
 })
 
 
-})
-
-
 const seekToSegment = (segment) => {
   if (!segment) return
 
@@ -411,6 +479,7 @@ const seekToSegment = (segment) => {
 
   pendingSeekTime.value = targetTime
   activeSegment.value = segment
+  lastCompletedSegmentId.value = null
   videoTime.value = targetTime
 
   const video = videoRef.value
@@ -420,6 +489,12 @@ const seekToSegment = (segment) => {
     video.currentTime = targetTime
   } catch {}
   pendingSeekTime.value = null
+  logHighlightDebug('seek', {
+    segmentId: segment.id ?? null,
+    start: segment.start ?? null,
+    end: segment.end ?? null,
+    targetTime,
+  })
   video.play()
 }
 
@@ -460,18 +535,43 @@ const onVideoTimeUpdate = (e) => {
     return
   }
 
-  const nextSegment = (() => {
-    const index = segments.findIndex((item) => item.id === segment.id)
-    if (index === -1) return segments[0] ?? null
-    return segments[index + 1] ?? null
-  })()
+  logHighlightDebug('segment-complete', {
+    segmentId: segment.id ?? null,
+    currentTime,
+    end: segment.end ?? null,
+  })
 
-  if (nextSegment) {
-    seekToSegment(nextSegment)
-  } else {
+  lastCompletedSegmentId.value = segment.id ?? null
+  activeSegment.value = null
+  pendingSeekTime.value = null
+
+  try {
     video.pause()
-    activeSegment.value = null
+  } catch {}
+}
+
+const nextHighlightSegment = computed(() => {
+  if (activeSegment.value || !availableHighlights.value.length) {
+    return null
   }
+
+  if (!lastCompletedSegmentId.value) {
+    return null
+  }
+
+  const index = availableHighlights.value.findIndex(
+    (item) => item.id === lastCompletedSegmentId.value,
+  )
+  if (index === -1) {
+    return null
+  }
+  return availableHighlights.value[index + 1] ?? null
+})
+
+const playNextHighlight = () => {
+  const segment = nextHighlightSegment.value
+  if (!segment) return
+  seekToSegment(segment)
 }
 
 const sceneDetails = computed(() => {
@@ -750,6 +850,34 @@ const highlightSummary = computed(() => {
   border-color: #2563eb;
   background: rgba(37, 99, 235, 0.08);
 }
+
+.scene-viewer__next-button {
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  border: none;
+  border-radius: 0.6rem;
+  background: #2563eb;
+  color: #f8fafc;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms ease, opacity 150ms ease;
+}
+
+.scene-viewer__next-button:hover,
+.scene-viewer__next-button:focus-visible {
+  background: #1d4ed8;
+}
+
+.scene-viewer__next-button:focus {
+  outline: none;
+}
+
+.scene-viewer__next-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
 
 .scene-viewer__timeline-header {
   display: flex;
