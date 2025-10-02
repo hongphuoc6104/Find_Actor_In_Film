@@ -1535,45 +1535,6 @@ def character_task():
                             highlights, TOP_HIGHLIGHTS_PER_SCENE
                         )
 
-                        normalised_highlights = normalise_highlights(
-                            highlights,
-                            merge_gap=float(highlight_gap_seconds),
-                            scene_start=start_timestamp,
-                            scene_end=end_timestamp,
-                            highlight_limit=None,
-                            logger=LOGGER,
-                            scene_identifier={
-                                "movie": movie_name,
-                                "track": track_key,
-                                "order": order_idx,
-                            },
-                        )
-                        highlights = normalised_highlights
-
-
-                        highlight_support = _summarise_highlight_support(
-                            highlights,
-                            det_threshold=float(highlight_det_threshold),
-                            similarity_threshold=highlight_similarity_threshold,
-                            min_duration=HIGHLIGHT_MIN_DURATION,
-                            min_score=HIGHLIGHT_MIN_SCORE,
-                        )
-                        if matcher_clusters:
-                            highlight_support["allowed_cluster_ids"] = sorted(
-                                matcher_clusters
-                            )
-                        elif allowed_clusters:
-                            highlight_support["allowed_cluster_ids"] = sorted(
-                                allowed_clusters
-                            )
-                        if final_id is not None:
-                            try:
-                                highlight_support["target_final_character_id"] = str(
-                                    final_id
-                                )
-                            except Exception:
-                                pass
-
                         clip_fps_value = float(fps) if fps else DEFAULT_CLIP_FPS
                         timeline_to_store = timeline_entries
 
@@ -1644,7 +1605,46 @@ def character_task():
 
                         start_timestamp = _parse_time(clip_start_entry.get("timestamp"))
                         end_timestamp = _parse_time(clip_end_entry.get("timestamp"))
+
+                        normalised_highlights = normalise_highlights(
+                            highlights,
+                            merge_gap=float(highlight_gap_seconds),
+                            scene_start=start_timestamp,
+                            scene_end=end_timestamp,
+                            highlight_limit=None,
+                            logger=LOGGER,
+                            scene_identifier={
+                                "movie": movie_name,
+                                "track": track_key,
+                                "order": order_idx,
+                            },
+                        )
+                        highlights = normalised_highlights
+
                         focus_timestamp = _parse_time(focus_entry.get("timestamp"))
+
+                        highlight_support = _summarise_highlight_support(
+                            highlights,
+                            det_threshold=float(highlight_det_threshold),
+                            similarity_threshold=highlight_similarity_threshold,
+                            min_duration=HIGHLIGHT_MIN_DURATION,
+                            min_score=HIGHLIGHT_MIN_SCORE,
+                        )
+                        if matcher_clusters:
+                            highlight_support["allowed_cluster_ids"] = sorted(
+                                matcher_clusters
+                            )
+                        elif allowed_clusters:
+                            highlight_support["allowed_cluster_ids"] = sorted(
+                                allowed_clusters
+                            )
+                        if final_id is not None:
+                            try:
+                                highlight_support["target_final_character_id"] = str(
+                                    final_id
+                                )
+                            except Exception:
+                                pass
 
                         if start_timestamp is not None:
                             start_timestamp = round(start_timestamp, 3)
