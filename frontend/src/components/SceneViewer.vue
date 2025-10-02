@@ -164,6 +164,7 @@ const parseCountValue = (value) => {
 }
 
 const highlightStats = computed(() => {
+  const count = availableHighlights.value.length
   const total = parseCountValue(props.scene?.highlight_total)
   const display = parseCountValue(props.scene?.highlight_display_count)
 

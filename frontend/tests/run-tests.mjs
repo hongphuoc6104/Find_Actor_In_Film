@@ -241,6 +241,37 @@ assert(
   'Scene viewer should rely on the configured tolerance when tracking highlight windows',
 )
 
+{
+  const sceneViewerModuleUrl = await compileVueModuleUrl(sceneViewerPath)
+  const { createApp, nextTick } = await import(vueRuntimeUrl)
+  const { default: SceneViewer } = await import(sceneViewerModuleUrl)
+
+  let summary
+  const props = {
+    scene: {
+      highlights: [
+        { id: 'a', start: 1, end: 2 },
+        { id: 'b', start: 3, end: 4 },
+      ],
+      highlight_total: '5',
+    },
+  }
+
+  const container = document.createElement('div')
+  const app = createApp(SceneViewer, props)
+  app.mount(container)
+  await nextTick()
+  summary = container.querySelector('.scene-viewer__meta')?.textContent ?? ''
+  app.unmount()
+
+  assert.equal(
+    summary,
+    '2/5 highlight từ backend',
+    'Highlight stats should fall back to the available highlight count when backend display totals are missing',
+  )
+}
+
+
 console.log('Scene viewer QA checks passed.')
 
 const { resolveConfigValue, toNumber, metaEnv, runtimeEnv, globalEnv } = configTest
