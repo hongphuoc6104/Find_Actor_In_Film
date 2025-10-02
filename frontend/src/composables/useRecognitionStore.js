@@ -321,6 +321,254 @@ const assetFieldKeys = [
 ]
 
 
+const HIGHLIGHT_GAP_THRESHOLD_SEC = 6
+const HIGHLIGHT_ISOLATED_DURATION_SEC = 1
+const HIGHLIGHT_ISOLATED_PAD_SEC = 2
+
+const toFiniteSeconds = (value) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const roundSeconds = (value) => {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  const rounded = Number(value.toFixed(3))
+  return Number.isFinite(rounded) ? rounded : 0
+}
+
+const resolveHighlightBound = (entry, fallbackMax = 0) => {
+  const candidates = [
+    entry?.duration,
+    entry?.scene_duration,
+    entry?.total_duration,
+    entry?.video_duration,
+    entry?.video_length,
+    entry?.video_end_timestamp,
+    entry?.end_time,
+  ]
+    .map((value) => toFiniteSeconds(value))
+    .filter((value) => value !== null && value >= 0)
+
+  const candidateMax = candidates.length ? Math.max(...candidates) : null
+  const max = Math.max(candidateMax ?? 0, fallbackMax ?? 0)
+  return {
+    min: 0,
+    max: max > 0 ? max : null,
+  }
+}
+
+const computeBestScore = (highlight) => {
+  const values = [
+    highlight?.effective_score,
+    highlight?.score,
+    highlight?.max_score,
+    highlight?.actor_similarity,
+  ]
+    .map((value) => toFiniteSeconds(value))
+    .filter((value) => value !== null)
+
+  if (!values.length) {
+    return null
+  }
+  return Math.max(...values)
+}
+
+const resolveOrderValue = (highlight, fallback) => {
+  const candidates = [
+    highlight?.order,
+    highlight?.index,
+    highlight?.position,
+    highlight?.rank,
+    highlight?.highlight_index,
+  ]
+    .map((value) => {
+      const parsed = Number(value)
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+    })
+    .filter((value) => value !== null)
+
+  if (candidates.length) {
+    return Math.min(...candidates)
+  }
+  return fallback
+}
+
+const summariseHighlightRange = (highlight) => {
+  const start = toFiniteSeconds(highlight?.start)
+  const end = toFiniteSeconds(highlight?.end)
+  if (start === null || end === null) {
+    return null
+  }
+  return {
+    start,
+    end,
+  }
+}
+
+const mergeHighlights = (highlights, entry) => {
+  const ranges = []
+  const list = Array.isArray(highlights) ? highlights : []
+  list.forEach((item, index) => {
+    if (!item || typeof item !== 'object') {
+      return
+    }
+    const start = toFiniteSeconds(item.start)
+    const end = toFiniteSeconds(item.end)
+    if (start === null || end === null) {
+      return
+    }
+    const normalisedStart = Math.min(start, end)
+    const normalisedEnd = Math.max(start, end)
+    ranges.push({
+      start: normalisedStart,
+      end: normalisedEnd,
+      duration: roundSeconds(Math.max(normalisedEnd - normalisedStart, 0)),
+      raw: item,
+      index,
+      order: resolveOrderValue(item, index + 1),
+      score: computeBestScore(item),
+    })
+  })
+
+  if (!ranges.length) {
+    return []
+  }
+
+  ranges.sort((a, b) => {
+    if (a.start === b.start) {
+      return a.end - b.end
+    }
+    return a.start - b.start
+  })
+
+  const merged = []
+  const gapThreshold = Number.isFinite(entry?.highlight_merge_gap)
+    ? entry.highlight_merge_gap
+    : HIGHLIGHT_GAP_THRESHOLD_SEC
+
+  ranges.forEach((range) => {
+    const last = merged[merged.length - 1]
+    if (!last) {
+      merged.push({
+        start: range.start,
+        end: range.end,
+        sources: [range],
+        order: range.order,
+        score: range.score,
+      })
+      return
+    }
+
+    if (range.start <= last.end + gapThreshold) {
+      last.end = Math.max(last.end, range.end)
+      last.order = Math.min(last.order, range.order)
+      if (range.score !== null) {
+        if (last.score === null || last.score === undefined) {
+          last.score = range.score
+        } else {
+          last.score = Math.max(last.score, range.score)
+        }
+      }
+      last.sources.push(range)
+    } else {
+      merged.push({
+        start: range.start,
+        end: range.end,
+        sources: [range],
+        order: range.order,
+        score: range.score,
+      })
+    }
+  })
+
+  const maxEnd = merged.reduce((acc, item) => Math.max(acc, item.end), 0)
+  const bounds = resolveHighlightBound(entry, maxEnd)
+  const isolatedThreshold = Number.isFinite(entry?.highlight_isolated_threshold)
+    ? entry.highlight_isolated_threshold
+    : HIGHLIGHT_ISOLATED_DURATION_SEC
+  const isolatedPad = Number.isFinite(entry?.highlight_isolated_pad)
+    ? entry.highlight_isolated_pad
+    : HIGHLIGHT_ISOLATED_PAD_SEC
+
+  merged.forEach((segment) => {
+    if (segment.sources.length !== 1) {
+      return
+    }
+    const source = segment.sources[0]
+    if (!source || !Number.isFinite(source.duration)) {
+      return
+    }
+    if (source.duration >= isolatedThreshold) {
+      return
+    }
+    const minBound = Number.isFinite(bounds.min) ? bounds.min : 0
+    const maxBound = Number.isFinite(bounds.max) ? bounds.max : null
+    const paddedStart = Math.max(segment.start - isolatedPad, minBound)
+    const paddedEndCandidate = segment.end + isolatedPad
+    const paddedEnd =
+      maxBound !== null ? Math.min(paddedEndCandidate, maxBound) : paddedEndCandidate
+    if (paddedEnd > paddedStart) {
+      segment.start = paddedStart
+      segment.end = paddedEnd
+    }
+  })
+
+  return merged.map((segment, index) => {
+    const start = roundSeconds(segment.start)
+    const end = roundSeconds(segment.end)
+    const duration = roundSeconds(Math.max(end - start, 0))
+    const primary = segment.sources[0]?.raw ?? {}
+    const idCandidates = segment.sources
+      .map((source) => {
+        const raw = source.raw
+        return (
+          raw?.id ??
+          raw?.key ??
+          raw?.uuid ??
+          raw?.order ??
+          raw?.index ??
+          raw?.highlight_index ??
+          source.index
+        )
+      })
+      .filter((value) => value !== null && value !== undefined)
+      .map((value) => String(value))
+
+    const id = `merged-${idCandidates.join('-') || index}`
+    const bestScore = segment.sources.reduce((acc, source) => {
+      if (source.score === null || source.score === undefined) {
+        return acc
+      }
+      if (acc === null) {
+        return source.score
+      }
+      return Math.max(acc, source.score)
+    }, null)
+
+    const order = Number.isFinite(segment.order) ? segment.order : index + 1
+    const aggregated = {
+      ...(primary && typeof primary === 'object' ? { ...primary } : {}),
+      id,
+      start,
+      end,
+      duration,
+      order,
+      merged_count: segment.sources.length,
+      source_highlights: segment.sources.map((source) => source.raw),
+    }
+
+    if (bestScore !== null) {
+      aggregated.effective_score = bestScore
+      aggregated.score = bestScore
+    }
+
+    return aggregated
+  })
+}
+
+
 const ensureFrameMetadata = (entry) => {
   if (!entry || typeof entry !== 'object') {
     return entry ?? null
@@ -338,6 +586,27 @@ const ensureFrameMetadata = (entry) => {
   copy.highlights = rawHighlights.map((item) =>
     item && typeof item === 'object' ? { ...item } : item,
   )
+
+  const mergedHighlights = mergeHighlights(copy.highlights, entry)
+  copy.merged_highlights = mergedHighlights
+
+  if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+    const summarise = (items) =>
+      items
+        .map((item) => summariseHighlightRange(item))
+        .filter((item) => item !== null)
+    try {
+      console.debug('DEBUG_HL ensureFrameMetadata merge highlights', {
+        rawCount: rawHighlights.length,
+        mergedCount: mergedHighlights.length,
+        raw: summarise(rawHighlights),
+        merged: summarise(mergedHighlights),
+      })
+    } catch (error) {
+      // Silently ignore logging failures
+    }
+  }
+
 
   const highlightOptions = {
     support: entry?.highlight_support,
@@ -654,6 +923,19 @@ const updateSceneEntry = (payload) => {
     return []
   })()
 
+  const sceneMergedHighlights = (() => {
+    if (Array.isArray(freshScene?.merged_highlights)) {
+      return freshScene.merged_highlights
+    }
+    if (Array.isArray(previousEntry?.merged_highlights)) {
+      return previousEntry.merged_highlights.map((item) =>
+        item && typeof item === 'object' ? { ...item } : item,
+      )
+    }
+    return []
+  })()
+
+
   const sceneHighlights = Array.isArray(baseScene?.highlights)
     ? baseScene.highlights
     : []
@@ -759,6 +1041,7 @@ const updateSceneEntry = (payload) => {
     baseScene.highlight_total = resolvedHighlightTotal
     baseScene.highlight_display_count = resolvedHighlightDisplayCount
     baseScene.filtered_highlights = sceneFilteredHighlights
+    baseScene.merged_highlights = sceneMergedHighlights
     if (resolvedStats) {
       baseScene.__fh_stats = resolvedStats
       baseScene.highlight_filter_stats = resolvedStats

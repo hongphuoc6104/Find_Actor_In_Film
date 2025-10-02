@@ -131,6 +131,56 @@ assert(
   'Character list should display match labels',
 )
 
+{
+  const captured = []
+  const originalDebug = console.debug
+  console.debug = (...args) => {
+    captured.push(args)
+  }
+  try {
+    const entry = ensureFrameMetadata({
+      duration: 50,
+      highlights: [
+        { id: 'a', start: 5, end: 5.4, duration: 0.4, order: 1 },
+        { id: 'b', start: 7, end: 8, duration: 1, order: 2 },
+        { id: 'c', start: 40, end: 40.5, duration: 0.5, order: 3 },
+      ],
+    })
+
+    assert(Array.isArray(entry.merged_highlights), 'Merged highlight array should be present')
+    assert.equal(
+      entry.merged_highlights.length,
+      2,
+      'Highlights within merge gap should collapse into fewer segments',
+    )
+
+    const [firstSegment, secondSegment] = entry.merged_highlights
+    assert.equal(firstSegment.start, 5, 'Merged segment should begin at earliest start time')
+    assert.equal(firstSegment.end, 8, 'Merged segment should extend to the furthest end within the cluster')
+    assert.equal(
+      secondSegment.start,
+      38,
+      'Isolated short highlight should be padded backwards within bounds',
+    )
+    assert.equal(
+      secondSegment.end,
+      42.5,
+      'Isolated short highlight should be padded forwards within bounds',
+    )
+
+    const debugInvocation = captured.find(
+      (args) => Array.isArray(args) && typeof args[0] === 'string' && args[0].includes('DEBUG_HL'),
+    )
+    assert(debugInvocation, 'DEBUG_HL logging should be emitted when merging highlights')
+    const payload = debugInvocation?.[1]
+    assert.equal(payload?.rawCount, 3, 'Debug log should include the raw highlight count')
+    assert.equal(payload?.mergedCount, 2, 'Debug log should include the merged highlight count')
+  } finally {
+    console.debug = originalDebug
+  }
+}
+
+
 console.log('Frontend snapshot tests passed.')
 
 const sceneViewerPath = resolve(dirname(fileURLToPath(import.meta.url)), '../src/components/SceneViewer.vue')
@@ -163,6 +213,12 @@ assert(
 )
 
 assert(
+  sceneViewerSource.includes('const mergedHighlights = computed(() => {'),
+  'Scene viewer should expose merged highlight timelines when provided by the backend',
+)
+
+
+assert(
   sceneViewerSource.includes('const rawHighlights = computed(() => {'),
   'Scene viewer should expose raw highlights for rescue rendering when filtering removes all items',
 )
@@ -170,6 +226,11 @@ assert(
 assert(
   sceneViewerSource.includes('const effectiveHighlights = computed(() => {'),
   'Scene viewer should expose a fallback highlight list when filtered highlights are empty',
+)
+
+assert(
+  sceneViewerSource.includes('if (mergedHighlights.value.length)'),
+  'Scene viewer highlight pipeline should prefer merged highlight spans when available',
 )
 
 assert(

@@ -180,12 +180,34 @@ const rawHighlights = computed(() => {
 
 const filteredHighlights = computed(() => filteredHighlightsRes.value?.items ?? [])
 
+const mergedHighlights = computed(() => {
+  const list = props.scene?.merged_highlights
+  if (!Array.isArray(list) || !list.length) {
+    return []
+  }
+  return list
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') {
+        return null
+      }
+      if (item.id !== undefined && item.id !== null && item.id !== '') {
+        return item
+      }
+      return { ...item, id: `merged-highlight-${index}` }
+    })
+    .filter((item) => item && typeof item === 'object')
+})
+
+
 const filterStats = computed(() => {
   const stats = filteredHighlightsRes.value?.stats
   return stats && typeof stats === 'object' ? stats : buildFallbackStats(filteredHighlights.value)
 })
 
 const effectiveHighlights = computed(() => {
+  if (mergedHighlights.value.length) {
+    return mergedHighlights.value
+  }
   if (filteredHighlights.value.length) {
     return filteredHighlights.value
   }
