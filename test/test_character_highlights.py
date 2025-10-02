@@ -3,6 +3,9 @@ import pytest
 pytest.importorskip("pandas")
 pytest.importorskip("numpy")
 
+import pandas as pd
+import tasks.character_task as character_module
+
 from tasks.character_task import (
     DEFAULT_HIGHLIGHT_DET_SCORE,
     DEFAULT_HIGHLIGHT_GAP_SECONDS,
@@ -250,3 +253,146 @@ def test_highlight_support_summary_preserves_thresholds():
     )
     assert summary["min_duration"] == pytest.approx(HIGHLIGHT_MIN_DURATION)
     assert summary["min_score"] == pytest.approx(HIGHLIGHT_MIN_SCORE)
+
+
+def test_character_task_uses_highlight_config(tmp_path, monkeypatch):
+    custom_det = 0.42
+    custom_gap = 1.75
+    custom_similarity = 0.66
+
+    clusters_path = tmp_path / "clusters.parquet"
+    embeddings_path = tmp_path / "embeddings.parquet"
+    output_path = tmp_path / "characters.json"
+
+    config = {
+        "storage": {
+            "warehouse_clusters": str(clusters_path),
+            "warehouse_embeddings": str(embeddings_path),
+            "characters_json": str(output_path),
+        },
+        "highlight": {
+            "det_score_threshold": custom_det,
+            "max_gap_seconds": custom_gap,
+            "similarity_threshold": custom_similarity,
+        },
+    }
+
+    clusters_df = pd.DataFrame(
+        {
+            "movie_id": [1, 1],
+            "movie": ["Demo", "Demo"],
+            "cluster_id": ["cluster-1", "cluster-1"],
+            "track_id": [11, 11],
+            "track_centroid": [[0.1, 0.2], [0.1, 0.2]],
+            "det_score": [0.9, 0.85],
+            "frame": ["0001.jpg", "0002.jpg"],
+            "timestamp": [0.0, 0.5],
+        }
+    )
+    embeddings_df = pd.DataFrame(
+        {
+            "movie_id": [1, 1],
+            "track_id": [11, 11],
+            "frame": ["0001.jpg", "0002.jpg"],
+            "timestamp": [0.0, 0.5],
+            "det_score": [0.9, 0.95],
+        }
+    )
+
+    captured: dict[str, float] = {}
+
+    def fake_load_config():
+        return config
+
+    def fake_read_parquet(path, *args, **kwargs):
+        path_str = str(path)
+        if path_str == str(clusters_path):
+            return clusters_df.copy()
+        if path_str == str(embeddings_path):
+            return embeddings_df.copy()
+        return pd.DataFrame()
+
+    def fake_prepare_track_timeline(*args, **kwargs):
+        timeline_entries = [
+            {
+                "timestamp": 0.0,
+                "frame": "0001.jpg",
+                "frame_index": 0,
+                "det_score": 0.9,
+                "cluster_id": "cluster-1",
+            },
+            {
+                "timestamp": 0.5,
+                "frame": "0002.jpg",
+                "frame_index": 1,
+                "det_score": 0.95,
+                "cluster_id": "cluster-1",
+            },
+        ]
+        return timeline_entries, []
+
+    def fake_build_highlights(
+            entries,
+            *,
+            det_th,
+            max_gap,
+            match_fn,
+            sim_threshold,
+            **kwargs,
+    ):
+        captured["det_th"] = det_th
+        captured["max_gap"] = max_gap
+        captured["sim_threshold"] = sim_threshold
+        return [
+            {
+                "timestamp": entries[0]["timestamp"] if entries else 0.0,
+                "duration": 1.0,
+                "score": 0.9,
+                "highlight_support": {},
+            }
+        ]
+
+    def fake_normalise_highlights(highlights, *args, merge_gap=None, **kwargs):
+        captured["merge_gap"] = merge_gap
+        return highlights
+
+    def fake_summarise_highlight_support(
+            highlights,
+            det_threshold,
+            similarity_threshold,
+            **kwargs,
+    ):
+        captured["summary_det"] = det_threshold
+        captured["summary_similarity"] = similarity_threshold
+        return {}
+
+    monkeypatch.setattr(character_module, "load_config", fake_load_config)
+    monkeypatch.setattr(character_module.pd, "read_parquet", fake_read_parquet)
+    monkeypatch.setattr(
+        character_module,
+        "_prepare_track_timeline",
+        fake_prepare_track_timeline,
+    )
+    monkeypatch.setattr(character_module, "_build_highlights", fake_build_highlights)
+    monkeypatch.setattr(character_module, "normalise_highlights", fake_normalise_highlights)
+    monkeypatch.setattr(
+        character_module,
+        "_summarise_highlight_support",
+        fake_summarise_highlight_support,
+    )
+    monkeypatch.setattr(
+        character_module,
+        "_limit_highlights_per_scene",
+        lambda highlights, limit=None: list(highlights),
+    )
+    monkeypatch.setattr(character_module, "filter_clusters_task", lambda *_, **__: None)
+    monkeypatch.setattr(character_module, "build_index", lambda *_, **__: None)
+
+    character_module.character_task()
+
+    assert captured["det_th"] == pytest.approx(custom_det)
+    assert captured["max_gap"] == pytest.approx(custom_gap)
+    assert captured["sim_threshold"] == pytest.approx(custom_similarity)
+    assert captured["merge_gap"] == pytest.approx(custom_gap)
+    assert captured["summary_det"] == pytest.approx(custom_det)
+    assert captured["summary_similarity"] == pytest.approx(custom_similarity)

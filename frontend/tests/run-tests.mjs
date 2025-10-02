@@ -1062,3 +1062,205 @@ wrapper.unmount()
 highlightStore.resetSearch()
 
 console.log('FaceSearch highlight interaction tests passed.')
+
+globalThis.__UPLOAD_TEST_CALLS__ = []
+globalThis.__UPLOAD_TEST_REJECT__ = false
+
+const axiosUploadStubModule = buildDataModule(`
+  const calls = globalThis.__UPLOAD_TEST_CALLS__;
+  export default {
+    post: async (url, data, config = {}) => {
+      const fields = [];
+      if (data && typeof data.entries === 'function') {
+        for (const [key, value] of data.entries()) {
+          if (value && typeof value === 'object' && 'name' in value && 'size' in value) {
+            fields.push([key, { name: value.name, size: value.size }]);
+          } else {
+            fields.push([key, value]);
+          }
+        }
+      }
+      calls.push({ url, fields, headers: config.headers ?? {} });
+      if (globalThis.__UPLOAD_TEST_REJECT__) {
+        const error = new Error('Upload failed');
+        error.response = { data: { detail: 'Máy chủ lỗi' } };
+        throw error;
+      }
+      return { data: { status: 'scheduled', detail: 'Pipeline execution triggered' } };
+    },
+  };
+`)
+
+const catalogUploadStubModule = buildDataModule(`
+  import { ref, computed } from '${vueModuleUrl}';
+  const movies = ref([]);
+  const isLoading = ref(false);
+  const error = ref('');
+  const lastFetched = ref(null);
+  export const calls = { fetch: 0 };
+  export const useMovieCatalog = () => {
+    const fetchMovies = async () => {
+      calls.fetch += 1;
+    };
+    return {
+      movies: computed(() => movies.value),
+      isLoading: computed(() => isLoading.value),
+      error: computed(() => error.value),
+      lastFetched: computed(() => lastFetched.value),
+      fetchMovies,
+    };
+  };
+`)
+
+const recognitionUploadStubModule = buildDataModule(`
+  export const useRecognitionStore = () => ({
+    movieProgress: () => ({ confirmed: 0, total: 0 }),
+  });
+`)
+
+const configUploadStubModule = buildDataModule(`
+  export const API_BASE_URL = 'http://api.test';
+`)
+
+const { calls: catalogCalls } = await import(catalogUploadStubModule)
+
+const movieManagementPath = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../src/views/MovieManagementPage.vue',
+)
+
+const movieManagementModuleUrl = await compileVueModuleUrl(movieManagementPath, {
+  axios: axiosUploadStubModule,
+  '../composables/useMovieCatalog.js': catalogUploadStubModule,
+  '../composables/useRecognitionStore.js': recognitionUploadStubModule,
+  '../config.js': configUploadStubModule,
+})
+
+const { default: MovieManagementPage } = await import(movieManagementModuleUrl)
+
+const uploadWrapper = mount(MovieManagementPage, { attachTo: document.body })
+
+await nextTick()
+await nextTick()
+
+assert.equal(
+  catalogCalls.fetch,
+  1,
+  'Movie catalog should be fetched on mount before interacting with the upload form',
+)
+
+const fileInput = uploadWrapper.element.querySelector('input[type="file"]')
+assert(fileInput, 'Upload form should render a file input element')
+const movieIdInput = uploadWrapper.element.querySelector('input[placeholder="movie_001"]')
+const sourceInput = uploadWrapper.element.querySelector('input[placeholder="Blu-ray rip"]')
+const refreshInput = uploadWrapper.element.querySelector('input[type="checkbox"]')
+
+const sampleFile = new dom.window.File(['video'], 'movie.mp4', { type: 'video/mp4' })
+Object.defineProperty(fileInput, 'files', {
+  value: [sampleFile],
+  writable: false,
+  configurable: true,
+})
+fileInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+
+movieIdInput.value = 'movie-123'
+movieIdInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+sourceInput.value = 'Streaming'
+sourceInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+refreshInput.checked = true
+refreshInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+
+const form = uploadWrapper.element.querySelector('form')
+form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
+
+await Promise.resolve()
+await nextTick()
+await nextTick()
+
+assert.equal(
+  globalThis.__UPLOAD_TEST_CALLS__.length,
+  1,
+  'Axios post should be invoked exactly once after submitting the upload form',
+)
+
+const [uploadCall] = globalThis.__UPLOAD_TEST_CALLS__
+assert.equal(
+  uploadCall.url,
+  'http://api.test/upload',
+  'Upload request should target the configured API endpoint',
+)
+assert.equal(
+  uploadCall.headers['Content-Type'],
+  'multipart/form-data',
+  'Upload request should use multipart form encoding',
+)
+
+const fieldMap = Object.fromEntries(uploadCall.fields.map(([key, value]) => [key, value]))
+assert('video' in fieldMap, 'Form data should include the video field')
+assert.equal(fieldMap.video.name, 'movie.mp4', 'Video field should retain the original filename')
+assert.equal(fieldMap.movie_id, 'movie-123', 'Movie identifier should be forwarded in the request payload')
+assert.equal(fieldMap.source, 'Streaming', 'Source metadata should be forwarded in the request payload')
+assert.equal(fieldMap.refresh, 'true', 'Refresh flag should be serialised as a truthy string')
+
+await nextTick()
+
+const successMessage = uploadWrapper.element.querySelector('.upload-form__info')
+assert(successMessage, 'Success message should render when the upload succeeds')
+assert.equal(
+  successMessage.textContent.trim(),
+  'Pipeline execution triggered',
+  'Upload form should display the backend success detail',
+)
+assert.equal(
+  catalogCalls.fetch,
+  2,
+  'Catalog should refresh after a successful upload submission',
+)
+assert.strictEqual(fileInput.value, '', 'File input should reset after a successful upload')
+
+globalThis.__UPLOAD_TEST_REJECT__ = true
+
+const secondFile = new dom.window.File(['video-2'], 'movie-2.mp4', { type: 'video/mp4' })
+Object.defineProperty(fileInput, 'files', {
+  value: [secondFile],
+  writable: false,
+  configurable: true,
+})
+fileInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+
+globalThis.__UPLOAD_TEST_CALLS__.length = 0
+
+form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
+
+await Promise.resolve()
+await nextTick()
+await nextTick()
+
+assert.equal(
+  globalThis.__UPLOAD_TEST_CALLS__.length,
+  1,
+  'Upload request should still be issued when the backend responds with an error',
+)
+
+const errorMessage = uploadWrapper.element.querySelector('.upload-form__error')
+assert(errorMessage, 'Error message should appear when the upload fails')
+assert.equal(
+  errorMessage.textContent.trim(),
+  'Máy chủ lỗi',
+  'Upload form should surface the backend error detail',
+)
+
+const infoMessageAfterError = uploadWrapper.element.querySelector('.upload-form__info')
+assert(
+  !infoMessageAfterError || infoMessageAfterError.textContent.trim() === '',
+  'Success message should be cleared after a failed upload',
+)
+assert.equal(
+  catalogCalls.fetch,
+  2,
+  'Catalog should not refresh again when the upload fails',
+)
+
+uploadWrapper.unmount()
+
+console.log('Movie management upload form tests passed.')

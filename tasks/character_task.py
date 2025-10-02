@@ -1087,6 +1087,19 @@ def _select_clip_frames(
     return frame_records[window_start : window_end + 1]
 
 
+def _get_highlight_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the user-provided highlight configuration if available."""
+
+    if not isinstance(cfg, dict):
+        return {}
+
+    for key in ("highlight", "highlights"):
+        candidate = cfg.get(key)
+        if isinstance(candidate, dict):
+            return candidate
+    return {}
+
+
 @task(name="Build Character Profiles Task")
 def character_task():
     """Xây dựng hồ sơ nhân vật riêng cho từng phim."""
@@ -1095,7 +1108,7 @@ def character_task():
     cfg = load_config()
     storage_cfg = cfg.get("storage", {})
     post_merge_cfg = cfg.get("post_merge", {})
-    highlight_cfg = cfg.get("highlights", {})
+    highlight_cfg = _get_highlight_config(cfg)
 
     highlight_det_threshold = _parse_time(highlight_cfg.get("det_score_threshold"))
     if highlight_det_threshold is None:

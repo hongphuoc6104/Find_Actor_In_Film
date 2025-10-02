@@ -11,7 +11,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -976,17 +983,27 @@ class SceneRequest(BaseModel):
     character_id: str
     cursor: int = 0
 
-
-class UploadRequest(BaseModel):
+class UploadMetadata(BaseModel):
     movie_id: Optional[str] = None
-    path: Optional[str] = None
     source: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
     refresh: bool = False
+
+class UploadRequest(UploadMetadata):
+    path: Optional[str] = None
+    filename: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
 
 
 def _run_pipeline_background(payload: Optional[Dict[str, Any]] = None) -> None:
     """Execute the data pipeline in a background task."""
+
+    temp_path: str | None = None
+    if isinstance(payload, dict):
+        path_candidate = payload.get("path")
+        if isinstance(path_candidate, str):
+            temp_path = path_candidate
+
 
     try:
         from flows.pipeline import main_pipeline
@@ -1002,7 +1019,11 @@ def _run_pipeline_background(payload: Optional[Dict[str, Any]] = None) -> None:
         logger.exception("Pipeline execution failed: %s", exc)
     finally:
         _clear_character_cache()
-
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                logger.warning("Failed to remove temporary upload: %s", temp_path)
 
 @app.get("/movies")
 async def list_movies_endpoint() -> List[Dict[str, Any]]:
@@ -1074,11 +1095,62 @@ async def scene_endpoint(request: SceneRequest) -> Dict[str, Any]:
 
 @app.post("/upload")
 async def upload_endpoint(
-    background_tasks: BackgroundTasks, payload: Optional[UploadRequest] = None
+        background_tasks: BackgroundTasks,
+        video: UploadFile | None = File(None),
+        movie_id: str | None = Form(None),
+        source: str | None = Form(None),
+        refresh: bool = Form(False),
+        metadata: str | None = Form(None),
 ) -> Dict[str, Any]:
     """Trigger the processing pipeline when a new video is uploaded."""
 
-    body = payload.dict(exclude_unset=True) if payload else {}
+    extra_metadata: Dict[str, Any] | None = None
+    if metadata:
+        try:
+            candidate = json.loads(metadata)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Invalid metadata payload") from exc
+        else:
+            if isinstance(candidate, dict):
+                extra_metadata = candidate
+            else:
+                raise HTTPException(
+                    status_code=400, detail="Metadata payload must be a JSON object"
+                )
+
+    upload_payload = UploadRequest(
+        movie_id=movie_id,
+        source=source,
+        refresh=refresh,
+        metadata=extra_metadata,
+    )
+
+    temp_path: str | None = None
+    try:
+        if video is not None:
+            suffix = Path(video.filename or "").suffix
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                temp_path = tmp_file.name
+                await video.seek(0)
+                shutil.copyfileobj(video.file, tmp_file)
+                if tmp_file.tell() == 0:
+                    raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+            upload_payload.path = temp_path
+            upload_payload.filename = video.filename
+    except HTTPException:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                logger.warning("Failed to remove temporary upload: %s", temp_path)
+        raise
+    finally:
+        if video is not None:
+            await video.close()
+
+    body = upload_payload.model_dump(exclude_unset=True, exclude_none=True)
+
     if body.get("refresh"):
         _clear_character_cache()
 
