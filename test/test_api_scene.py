@@ -365,6 +365,81 @@ def test_scene_endpoint_flattens_highlights(tmp_path, monkeypatch):
     finally:
         main._clear_character_cache()
 
+def test_scene_endpoint_handles_highlights_without_timeline(tmp_path, monkeypatch):
+    frames_root = tmp_path / "frames"
+    previews_root = tmp_path / "previews"
+    characters_path = tmp_path / "characters.json"
+
+    movie_key = "movie1"
+    character_key = "char1"
+    movie_folder = "MOVIE_FOLDER"
+    frame_name = "frame_0001.jpg"
+
+    (frames_root / movie_folder).mkdir(parents=True, exist_ok=True)
+    (frames_root / movie_folder / frame_name).write_bytes(b"frame")
+
+    characters = {
+        movie_key: {
+            character_key: {
+                "movie": movie_folder,
+                "scenes": [
+                    {
+                        "frame": frame_name,
+                        "scene_index": 2,
+                        "video_start_timestamp": 10.0,
+                        "video_end_timestamp": 13.0,
+                        "highlights": [
+                            {"start": 10.0, "end": 11.0, "max_score": 0.91},
+                            {"start": 12.0, "end": 13.0, "max_score": 0.89},
+                        ],
+                    }
+                ],
+            }
+        }
+    }
+
+    characters_path.write_text(json.dumps(characters), encoding="utf-8")
+
+    config = {
+        "storage": {
+            "frames_root": str(frames_root),
+            "cluster_previews_root": str(previews_root),
+            "characters_json": str(characters_path),
+        }
+    }
+
+    monkeypatch.setattr("utils.config_loader.load_config", lambda: config)
+    _stub_insightface(monkeypatch)
+    sys.modules.pop("api.main", None)
+    main = importlib.import_module("api.main")
+
+    try:
+        with TestClient(main.app) as client:
+            response = client.post(
+                "/scene",
+                json={
+                    "movie_id": movie_key,
+                    "character_id": character_key,
+                    "cursor": 0,
+                },
+            )
+            assert response.status_code == 200
+            payload = response.json()
+
+            scene = payload["scene"]
+            highlights = scene.get("highlights")
+            assert isinstance(highlights, list)
+            assert len(highlights) == 1
+
+            merged = highlights[0]
+            assert merged["start"] == 10.0
+            assert merged["end"] == 13.0
+            assert scene.get("highlight_total") == 1
+            assert scene.get("highlight_index") == 0
+    finally:
+        main._clear_character_cache()
+
+
 def test_scene_endpoint_falls_back_when_no_highlights(tmp_path, monkeypatch):
     frames_root = tmp_path / "frames"
     previews_root = tmp_path / "previews"

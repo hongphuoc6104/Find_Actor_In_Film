@@ -548,29 +548,32 @@ def _convert_scene_entry(
                 converted["timeline"].append(item)
 
     # --- Highlights ---
-            scene_start = (
-                    _parse_float(converted.get("video_start_timestamp"))
-                    or _parse_float(converted.get("start_time"))
-                    or _parse_float(converted.get("clip_start_timestamp"))
-            )
-            scene_end = (
-                    _parse_float(converted.get("video_end_timestamp"))
-                    or _parse_float(converted.get("end_time"))
-                    or _parse_float(converted.get("clip_end_timestamp"))
-            )
-            highlights = normalise_highlights(
-                converted.get("highlights"),
-                highlight_limit=_HIGHLIGHT_LIMIT,
-                merge_gap=_MERGE_GAP,
-                scene_start=scene_start,
-                scene_end=scene_end,
-                logger=logger,
-                scene_identifier={
-                    "scene": converted.get("scene_index"),
-                    "movie": movie,
-                    "character": movie_id,
-                },
-            )
+    scene_start = (
+        _parse_float(converted.get("video_start_timestamp"))
+        or _parse_float(converted.get("start_time"))
+        or _parse_float(converted.get("clip_start_timestamp"))
+    )
+    scene_end = (
+        _parse_float(converted.get("video_end_timestamp"))
+        or _parse_float(converted.get("end_time"))
+        or _parse_float(converted.get("clip_end_timestamp"))
+    )
+    raw_highlights = converted.get("highlights")
+    if raw_highlights is None:
+        raw_highlights = []
+    highlights = normalise_highlights(
+        raw_highlights,
+        highlight_limit=_HIGHLIGHT_LIMIT,
+        merge_gap=_MERGE_GAP,
+        scene_start=scene_start,
+        scene_end=scene_end,
+        logger=logger,
+        scene_identifier={
+            "scene": converted.get("scene_index"),
+            "movie": movie,
+            "character": movie_id,
+        },
+    )
     normalized: List[Dict[str, Any]] = []
     for h in highlights or []:
         if not isinstance(h, dict):
