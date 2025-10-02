@@ -163,127 +163,127 @@ def normalise_highlights(
                 end = start
             duration = max(end - start, 0.0)
 
-            highlight_copy["start"] = round(start, 3)
-            highlight_copy["end"] = round(end, 3)
-            highlight_copy["duration"] = round(duration, 3)
-            highlight_copy["match_count"] = int(match_count)
+        highlight_copy["start"] = round(start, 3)
+        highlight_copy["end"] = round(end, 3)
+        highlight_copy["duration"] = round(duration, 3)
+        highlight_copy["match_count"] = int(match_count)
 
-            det_scores = []
-            for key in ("max_det_score", "min_det_score", "det_score"):
-                det_scores.extend(_collect_numbers([highlight_copy.get(key)]))
+        det_scores = []
+        for key in ("max_det_score", "min_det_score", "det_score"):
+            det_scores.extend(_collect_numbers([highlight_copy.get(key)]))
 
-            similarity_candidates: List[float] = []
-            for key in (
-                    "score",
-                    "max_score",
-                    "avg_similarity",
-                    "max_similarity",
-                    "actor_similarity",
-                    "similarity",
-            ):
-                similarity_candidates.extend(_collect_numbers([highlight_copy.get(key)]))
+        similarity_candidates: List[float] = []
+        for key in (
+                "score",
+                "max_score",
+                "avg_similarity",
+                "max_similarity",
+                "actor_similarity",
+                "similarity",
+        ):
+            similarity_candidates.extend(_collect_numbers([highlight_copy.get(key)]))
 
-            prepared_segments.append(
-                {
-                    "start": float(highlight_copy["start"]),
-                    "end": float(highlight_copy["end"]),
-                    "match_count": int(match_count),
-                    "det_scores": det_scores,
-                    "similarities": similarity_candidates,
-                    "payload": highlight_copy,
-                    "index": index,
-                }
-            )
+        prepared_segments.append(
+            {
+                "start": float(highlight_copy["start"]),
+                "end": float(highlight_copy["end"]),
+                "match_count": int(match_count),
+                "det_scores": det_scores,
+                "similarities": similarity_candidates,
+                "payload": highlight_copy,
+                "index": index,
+            }
+        )
 
-            if not prepared_segments:
-                return []
+    if not prepared_segments:
+        return []
 
-            prepared_segments.sort(key=lambda item: (item["start"], item["end"], item["index"]))
+    prepared_segments.sort(key=lambda item: (item["start"], item["end"], item["index"]))
 
-            merged_segments: List[Dict[str, Any]] = []
-            current: Dict[str, Any] | None = None
+    merged_segments: List[Dict[str, Any]] = []
+    current: Dict[str, Any] | None = None
 
-            def _finalise(segment: Dict[str, Any]) -> Dict[str, Any]:
-                start_value = segment["start"]
-                end_value = segment["end"]
-                duration_value = max(end_value - start_value, 0.0)
-                det_scores = segment.get("det_scores", [])
-                similarities = segment.get("similarities", [])
-                sources = segment.get("sources", [])
-                total_match_count = int(segment.get("match_count", 0))
+    def _finalise(segment: Dict[str, Any]) -> Dict[str, Any]:
+        start_value = segment["start"]
+        end_value = segment["end"]
+        duration_value = max(end_value - start_value, 0.0)
+        det_scores = segment.get("det_scores", [])
+        similarities = segment.get("similarities", [])
+        sources = segment.get("sources", [])
+        total_match_count = int(segment.get("match_count", 0))
 
-                best_similarity = _max_or_none(similarities)
-                if best_similarity is None:
-                    best_similarity = 0.0
-                similarity_percent = round(best_similarity * 100.0, 2)
+        best_similarity = _max_or_none(similarities)
+        if best_similarity is None:
+            best_similarity = 0.0
+        similarity_percent = round(best_similarity * 100.0, 2)
 
-                merged_payload: Dict[str, Any] = {
-                    "start": round(start_value, 3),
-                    "end": round(end_value, 3),
-                    "duration": round(duration_value, 3),
-                    "match_count": total_match_count,
-                    "sources": [
-                        {"raw": dict(source)}
-                        for source in sources
-                        if isinstance(source, dict)
-                    ],
-                }
+        merged_payload: Dict[str, Any] = {
+            "start": round(start_value, 3),
+            "end": round(end_value, 3),
+            "duration": round(duration_value, 3),
+            "match_count": total_match_count,
+            "sources": [
+                {"raw": dict(source)}
+                for source in sources
+                if isinstance(source, dict)
+            ],
+        }
 
-                if det_scores:
-                    merged_payload["max_det_score"] = max(det_scores)
-                    merged_payload["min_det_score"] = min(det_scores)
+        if det_scores:
+            merged_payload["max_det_score"] = max(det_scores)
+            merged_payload["min_det_score"] = min(det_scores)
 
-                merged_payload["score"] = float(best_similarity)
-                merged_payload["max_score"] = float(best_similarity)
-                if similarities:
-                    merged_payload["max_similarity"] = max(similarities)
-                    merged_payload["min_similarity"] = min(similarities)
-                    merged_payload["avg_similarity"] = sum(similarities) / len(similarities)
+        merged_payload["score"] = float(best_similarity)
+        merged_payload["max_score"] = float(best_similarity)
+        if similarities:
+            merged_payload["max_similarity"] = max(similarities)
+            merged_payload["min_similarity"] = min(similarities)
+            merged_payload["avg_similarity"] = sum(similarities) / len(similarities)
 
-                merged_payload["similarity_percent"] = similarity_percent
+        merged_payload["similarity_percent"] = similarity_percent
 
-                # Merge union-able fields from sources
-                matched_clusters: set[str] = set()
-                matched_final_ids: set[str] = set()
-                supporting_detections: List[Any] = []
-                has_target = False
+        # Merge union-able fields from sources
+        matched_clusters: set[str] = set()
+        matched_final_ids: set[str] = set()
+        supporting_detections: List[Any] = []
+        has_target = False
 
-                for source in sources:
-                    clusters = source.get("matched_cluster_ids")
-                    if isinstance(clusters, (list, set, tuple)):
-                        matched_clusters.update(str(c) for c in clusters if c is not None)
-                    final_ids = source.get("matched_final_character_ids")
-                    if isinstance(final_ids, (list, set, tuple)):
-                        matched_final_ids.update(str(c) for c in final_ids if c is not None)
-                    detections = source.get("supporting_detections")
-                    if isinstance(detections, list):
-                        supporting_detections.extend(
-                            det for det in detections if isinstance(det, dict)
-                        )
-                    if source.get("has_target"):
-                        has_target = True
+        for source in sources:
+            clusters = source.get("matched_cluster_ids")
+            if isinstance(clusters, (list, set, tuple)):
+                matched_clusters.update(str(c) for c in clusters if c is not None)
+            final_ids = source.get("matched_final_character_ids")
+            if isinstance(final_ids, (list, set, tuple)):
+                matched_final_ids.update(str(c) for c in final_ids if c is not None)
+            detections = source.get("supporting_detections")
+            if isinstance(detections, list):
+                supporting_detections.extend(
+                    det for det in detections if isinstance(det, dict)
+                )
+            if source.get("has_target"):
+                has_target = True
 
-                if matched_clusters:
-                    merged_payload["matched_cluster_ids"] = sorted(matched_clusters)
-                if matched_final_ids:
-                    merged_payload["matched_final_character_ids"] = sorted(matched_final_ids)
-                if supporting_detections:
-                    merged_payload["supporting_detections"] = supporting_detections
-                if has_target:
-                    merged_payload["has_target"] = True
+        if matched_clusters:
+            merged_payload["matched_cluster_ids"] = sorted(matched_clusters)
+        if matched_final_ids:
+            merged_payload["matched_final_character_ids"] = sorted(matched_final_ids)
+        if supporting_detections:
+            merged_payload["supporting_detections"] = supporting_detections
+        if has_target:
+            merged_payload["has_target"] = True
 
-                return merged_payload
+        return merged_payload
 
-            for segment in prepared_segments:
-                if current is None:
-                    current = {
-                        "start": segment["start"],
-                        "end": segment["end"],
-                        "match_count": segment["match_count"],
-                        "det_scores": list(segment["det_scores"]),
-                        "similarities": list(segment["similarities"]),
-                        "sources": [segment["payload"]],
-                    }
+    for segment in prepared_segments:
+        if current is None:
+            current = {
+                "start": segment["start"],
+                "end": segment["end"],
+                "match_count": segment["match_count"],
+                "det_scores": list(segment["det_scores"]),
+                "similarities": list(segment["similarities"]),
+                "sources": [segment["payload"]],
+            }
             continue
 
         gap = segment["start"] - current["end"]
