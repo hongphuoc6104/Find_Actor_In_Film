@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
 import { JSDOM } from 'jsdom'
 import { parse, compileScript } from '@vue/compiler-sfc'
@@ -40,10 +39,15 @@ const buildDataModule = (code) => {
   return `data:text/javascript;base64,${base64}`
 }
 
-const require = createRequire(import.meta.url)
-const vueRuntimeUrl = pathToFileURL(
-  require.resolve('vue/dist/vue.runtime.esm-bundler.js'),
-).href
+const vueRuntimeModule = await import('vue')
+globalThis.__VUE__ = vueRuntimeModule
+const vueExportNames = Object.keys(vueRuntimeModule).sort()
+const vueBridgeModule = [
+  'const vue = globalThis.__VUE__;',
+  'export default vue;',
+  ...vueExportNames.map((name) => `export const ${name} = vue.${name};`),
+].join('\n')
+const vueModuleUrl = buildDataModule(vueBridgeModule)
 
 const compileVueModuleUrl = async (filePath, replacements = {}) => {
   const source = await readFile(filePath, 'utf-8')
@@ -51,9 +55,9 @@ const compileVueModuleUrl = async (filePath, replacements = {}) => {
   const script = compileScript(descriptor, { id: filePath, inlineTemplate: true })
   let code = script.content
 
-  if (vueRuntimeUrl) {
-    code = code.split("from 'vue'").join(`from '${vueRuntimeUrl}'`)
-    code = code.split('from "vue"').join(`from "${vueRuntimeUrl}"`)
+  if (vueModuleUrl) {
+    code = code.split("from 'vue'").join(`from '${vueModuleUrl}'`)
+    code = code.split('from "vue"').join(`from "${vueModuleUrl}"`)
   }
 
   for (const [original, replacement] of Object.entries(replacements)) {
@@ -243,7 +247,7 @@ assert(
 
 {
   const sceneViewerModuleUrl = await compileVueModuleUrl(sceneViewerPath)
-  const { createApp, nextTick } = await import(vueRuntimeUrl)
+  const { createApp, nextTick } = await import(vueModuleUrl)
   const { default: SceneViewer } = await import(sceneViewerModuleUrl)
 
   let summary
@@ -776,7 +780,7 @@ if (!globalThis.URL.revokeObjectURL) {
 }
 
 const sceneViewerStubModule = buildDataModule(`
-  import { defineComponent, h } from '${vueRuntimeUrl}';
+  import { defineComponent, h } from '${vueModuleUrl}';
   export default defineComponent({
     name: 'SceneViewerStub',
     props: {
@@ -814,7 +818,7 @@ const faceSearchModuleUrl = await compileVueModuleUrl(faceSearchPath, {
 
 const { default: FaceSearchComponent } = await import(faceSearchModuleUrl)
 const { mount } = await import('@vue/test-utils')
-const { nextTick } = await import(vueRuntimeUrl)
+const { nextTick } = await import(vueModuleUrl)
 
 highlightStore.resetSearch()
 highlightStore.state.movies = [
