@@ -126,6 +126,31 @@ def test_recognize_prefers_present_bucket(monkeypatch, configured_thresholds):
     assert {char["character_id"] for char in movie["characters"]} == {"A"}
 
 
+def test_recognize_deduplicates_characters_by_id(monkeypatch, configured_thresholds):
+    def fake_search(image_path: str, k: int, score_floor: float, max_results: int):
+        return {
+            "1": [
+                _build_candidate(0.72, movie="Movie A", character_id="A"),
+                _build_candidate(
+                    0.64, movie="Movie A", character_id="A", rep_image="dup.jpg"
+                ),
+            ]
+        }
+
+    monkeypatch.setattr(recognition, "search_actor", fake_search)
+
+    result = recognition.recognize("/tmp/image.jpg")
+
+    assert result["is_unknown"] is False
+    assert len(result["movies"]) == 1
+
+    movie = result["movies"][0]
+    characters = movie["characters"]
+    assert len(characters) == 1
+    assert characters[0]["character_id"] == "A"
+
+
+
 def test_recognize_uses_near_match_when_no_present(monkeypatch, configured_thresholds):
     def fake_search(image_path: str, k: int, score_floor: float, max_results: int):
         return {

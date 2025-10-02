@@ -247,6 +247,7 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
         if not isinstance(candidates, list) or not candidates:
             continue
 
+        seen_character_ids: set[str] | None = None
         for candidate in candidates:
             if not isinstance(candidate, dict):
                 continue
@@ -273,6 +274,11 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
                     "match_label": label,
                 },
             )
+            current_seen = movie_entry.setdefault("_seen_character_ids", set())
+            if not isinstance(current_seen, set):
+                current_seen = set()
+                movie_entry["_seen_character_ids"] = current_seen
+            seen_character_ids = current_seen
             if not movie_entry.get("movie") and candidate.get("movie"):
                 movie_entry["movie"] = candidate.get("movie")
 
@@ -332,7 +338,12 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
                 formatted_character["highlight_total"] = len(scene_variants)
 
 
-            if formatted_character["character_id"]:
+            character_id = formatted_character["character_id"]
+            if character_id and seen_character_ids is not None:
+                if character_id in seen_character_ids:
+                    continue
+                seen_character_ids.add(character_id)
+            if character_id:
                 movie_entry["characters"].append(formatted_character)
                 if best_score is None:
                     best_score = score
@@ -349,6 +360,7 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
 
     movies: List[Dict[str, Any]] = []
     for movie_entry in selected_movies_map.values():
+        movie_entry.pop("_seen_character_ids", None)
         characters = movie_entry.get("characters", [])
         if not characters:
             continue
