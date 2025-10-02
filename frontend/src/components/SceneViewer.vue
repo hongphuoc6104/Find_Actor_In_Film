@@ -49,9 +49,6 @@
           </dl>
         </section>
 
-        <p v-if="filterDiagnosticMessage" class="scene-viewer__notice">
-          {{ filterDiagnosticMessage }}
-        </p>
 
         <details v-if="timelineSegments.length" class="scene-viewer__panel scene-viewer__timeline" open>
           <summary>Những đoạn highlight có nhân vật xuất hiện nổi bật</summary>
@@ -80,7 +77,6 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { toAbsoluteAssetUrl } from '../utils/assetUrls.js'
-import { filterHighlights } from '../utils/highlights.js'
 import { PAUSE_TOLERANCE_SEC, SEEK_PAD_SEC } from '../utils/config.js'
 
 const props = defineProps({
@@ -101,10 +97,6 @@ const videoRef = ref(null)
 const videoTime = ref(0)
 const pendingSeekTime = ref(null)
 const activeSegment = ref(null)
-const DEFAULT_HIGHLIGHT_SUPPORT = Object.freeze({
-  det_score_threshold: 0.75,
-  min_duration: 4,
-})
 
 const parseIndexValue = (value) => {
   const parsed = Number(value)
@@ -128,63 +120,8 @@ const resolveSceneIdentifier = (scene) => {
 }
 
 
-const highlightFilterOptions = computed(() => {
-  const scene = props.scene
-  const options = {}
-  if (scene && typeof scene.highlight_settings === 'object') {
-    options.settings = scene.highlight_settings
-  }
-  if (scene && typeof scene.highlight_support === 'object') {
-    options.support = scene.highlight_support
-  } else {
-    options.support = DEFAULT_HIGHLIGHT_SUPPORT
-  }
-  return options
-})
-
-const buildFallbackStats = (items = []) => ({
-  inCount: items.length,
-  outCount: 0,
-  reasons: { det_score: null, score: null, duration: null },
-})
-
-const filteredHighlightsRes = computed(() => {
-  const scene = props.scene
-  const options = highlightFilterOptions.value
-  if (!scene) {
-    return filterHighlights([], options)
-  }
-
-  if (Array.isArray(scene.filtered_highlights)) {
-    const items = scene.filtered_highlights
-    const stats =
-      scene.highlight_filter_stats && typeof scene.highlight_filter_stats === 'object'
-        ? scene.highlight_filter_stats
-        : buildFallbackStats(items)
-    return { items, stats }
-  }
-
-  const source = Array.isArray(scene.highlights) ? scene.highlights : []
-  return filterHighlights(source, {
-    settings: options.settings,
-    support: options.support,
-  })
-})
-
-const rawHighlights = computed(() => {
-  if (!Array.isArray(props.scene?.highlights)) {
-    return []
-  }
-  return props.scene.highlights
-})
-
-const filteredHighlights = computed(() => filteredHighlightsRes.value?.items ?? [])
-
-const mergedHighlights = computed(() => {
-  const list = props.scene?.merged_highlights
-  if (!Array.isArray(list) || !list.length) {
-    return []
-  }
+ const availableHighlights = computed(() => {
+  const list = Array.isArray(props.scene?.highlights) ? props.scene.highlights : []
   return list
     .map((item, index) => {
       if (!item || typeof item !== 'object') {
@@ -193,60 +130,11 @@ const mergedHighlights = computed(() => {
       if (item.id !== undefined && item.id !== null && item.id !== '') {
         return item
       }
-      return { ...item, id: `merged-highlight-${index}` }
+      return { ...item, id: `highlight-${index}` }
     })
     .filter((item) => item && typeof item === 'object')
 })
 
-
-const filterStats = computed(() => {
-  const stats = filteredHighlightsRes.value?.stats
-  return stats && typeof stats === 'object' ? stats : buildFallbackStats(filteredHighlights.value)
-})
-
-const effectiveHighlights = computed(() => {
-  if (mergedHighlights.value.length) {
-    return mergedHighlights.value
-  }
-  if (filteredHighlights.value.length) {
-    return filteredHighlights.value
-  }
-  return rawHighlights.value.map((item, index) => {
-    if (!item || typeof item !== 'object') {
-      return item
-    }
-    if (item.id !== undefined && item.id !== null && item.id !== '') {
-      return item
-    }
-    return { ...item, id: `raw-highlight-${index}` }
-  })
-})
-
-const filterDiagnosticMessage = computed(() => {
-  if (filteredHighlights.value.length || !rawHighlights.value.length) {
-    return ''
-  }
-  const outCount = Number(filterStats.value?.outCount ?? 0)
-  if (!Number.isFinite(outCount) || outCount <= 0) {
-    return ''
-  }
-
-  const reasons = filterStats.value?.reasons ?? {}
-  const parts = []
-  const formatReason = (value, label) => {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed) && parsed > 0) {
-      parts.push(`${label} ≥ ${parsed}`)
-    }
-  }
-  formatReason(reasons.score, 'Điểm')
-  formatReason(reasons.det_score, 'Điểm phát hiện')
-  formatReason(reasons.duration, 'Độ dài')
-
-  const thresholdsText = parts.length ? ` (ngưỡng: ${parts.join(', ')})` : ''
-  return `Không có highlight đạt chuẩn sau khi áp dụng bộ lọc${thresholdsText}. Đang hiển thị danh sách highlight gốc (${outCount} mục bị loại).`
-  return `Không có highlight đạt chuẩn sau khi áp dụng bộ lọc${thresholdsText}. Đang hiển thị danh sách highlight gốc (${outCount} mục bị loại).`
-})
 
 
 const parseCountValue = (value) => {
@@ -257,17 +145,11 @@ const parseCountValue = (value) => {
 const highlightStats = computed(() => {
   const total = parseCountValue(props.scene?.highlight_total)
   const display = parseCountValue(props.scene?.highlight_display_count)
-  const filteredCount = filterStats.value?.inCount ?? filteredHighlights.value.length
-  const effectiveCount = effectiveHighlights.value.length
-  const usingRescuePath = filteredHighlights.value.length === 0 && effectiveCount > 0
-  const resolvedDisplay = display !== null ? display : filteredCount
+
   return {
     total,
-    display: usingRescuePath ? effectiveCount : resolvedDisplay,
-    filteredCount,
-    effectiveCount,
-    rescueCount: usingRescuePath ? effectiveCount : 0,
-    stats: filterStats.value,
+    display: display !== null ? display : count,
+    count,
   }
 })
 
@@ -357,8 +239,8 @@ const sceneStartTime = computed(() => {
 
   if (!props.scene) return null
 
-  const highlightStart = effectiveHighlights.value.length
-    ? computeSegmentSeekStart(effectiveHighlights.value[0])
+  const highlightStart = availableHighlights.value.length
+    ? computeSegmentSeekStart(availableHighlights.value[0])
     : null
 
   const candidates = [
@@ -377,7 +259,7 @@ const sceneStartTime = computed(() => {
 /* --- Video state --- */
 const resetImageSize = () => { imageSize.width = 0; imageSize.height = 0 }
 const resetVideoState = () => {
-  activeSegment.value = effectiveHighlights.value[0] ?? null
+  activeSegment.value = availableHighlights.value[0] ?? null
   videoSize.width = parseDimension(props.scene?.width)
   videoSize.height = parseDimension(props.scene?.height)
   const safeStart = sceneStartTime.value ?? 0
@@ -411,7 +293,7 @@ const sceneImage = computed(() => {
 
 watch(() => props.scene, () => { resetImageSize(); resetVideoState() })
 watch(() => sceneVideo.value, () => { resetVideoState() })
-watch(effectiveHighlights, (segments) => {
+watch(availableHighlights, (segments) => {
   if (!segments.length) {
     activeSegment.value = null
     return
@@ -455,15 +337,13 @@ const timelineSegments = computed(() => {
     if (Number.isFinite(parsedTotal) && parsedTotal > 0) {
       return parsedTotal
     }
-    if (stats.filteredCount) {
-      return stats.filteredCount
+    if (Number.isFinite(stats.display) && stats.display > 0) {
+      return stats.display
     }
-    if (stats.effectiveCount) {
-      return stats.effectiveCount
-    }
-    return effectiveHighlights.value.length
+    return stats.count
   })()
-  return effectiveHighlights.value.map((highlight, index) => {
+
+  const segments = availableHighlights.value.map((highlight, index) => {
     const orderValue = Number.isFinite(highlight.order)
       ? Number(highlight.order)
       : index + 1
@@ -503,6 +383,23 @@ const timelineSegments = computed(() => {
             }),
     }
   })
+
+  if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+    try {
+      console.debug('DEBUG_HL SceneViewer menu', {
+        highlightCount: segments.length,
+        reportedTotal: stats.total ?? null,
+        reportedDisplay: stats.display ?? null,
+      })
+    } catch (error) {
+      // Ignore logging errors
+    }
+  }
+
+  return segments
+})
+
+
 })
 
 
@@ -532,7 +429,8 @@ const onVideoTimeUpdate = (e) => {
   const currentTime = video.currentTime ?? 0
   videoTime.value = currentTime
 
-  const segments = effectiveHighlights.value
+  const segments = availableHighlights.value
+
   if (!segments.length) {
     return
   }
@@ -584,7 +482,8 @@ const sceneDetails = computed(() => {
   const { display, total } = highlightStats.value
   if (display) {
     const labelValue = total !== null ? `${display}/${total}` : display
-    details.push({ label: 'Highlight đạt chuẩn', value: labelValue })
+    details.push({ label: 'Highlight từ backend', value: labelValue })
+
   }
   return details
 })
@@ -622,41 +521,9 @@ watch(
   { immediate: true },
 )
 
-const zeroHighlightLogKey = ref(null)
-watch(
-  () => effectiveHighlights.value.length,
-  (length) => {
-    if (!props.scene) {
-      return
-    }
-    if (length > 0) {
-      zeroHighlightLogKey.value = null
-      return
-    }
-    const rawCount = rawHighlights.value.length
-    if (!rawCount) {
-      return
-    }
-    const filteredCount = filteredHighlights.value.length
-    const stats = filterStats.value
-    const sceneId = resolveSceneIdentifier(props.scene)
-    const key = `${sceneId ?? 'unknown'}::${rawCount}::${filteredCount}`
-    if (zeroHighlightLogKey.value === key) {
-      return
-    }
-    zeroHighlightLogKey.value = key
-    console.debug('SceneViewer: no visible highlights rendered, falling back to raw data', {
-      sceneId,
-      rawCount,
-      filteredCount,
-      filterStats: stats,
-    })
-  },
-  { immediate: true },
-)
 
 const hasSidebarContent = computed(
-  () => Boolean(sceneDetails.value.length || timelineSegments.value.length || filterDiagnosticMessage.value),
+  () => Boolean(sceneDetails.value.length || timelineSegments.value.length),
 )
 
 const onImageLoad = (e) => {
@@ -679,19 +546,23 @@ const onVideoLoadedMetadata = (e) => {
 }
 
 const highlightSummary = computed(() => {
-  const { display, total } = highlightStats.value
+  const { display, total, count } = highlightStats.value
   const displayValue = Number(display)
-  const effectiveDisplay = Number.isFinite(displayValue) ? displayValue : 0
+  const effectiveDisplay = Number.isFinite(displayValue)
+    ? displayValue
+    : Number.isFinite(Number(count))
+    ? Number(count)
+    : 0
   if (!effectiveDisplay) {
-    return 'Không có highlight đạt chuẩn'
+    return 'Không có highlight từ backend'
   }
   const totalValue = Number(total)
   if (Number.isFinite(totalValue) && totalValue > 0) {
-    return `${effectiveDisplay}/${totalValue} highlight đạt chuẩn`
+    return `${effectiveDisplay}/${totalValue} highlight từ backend`
   }
   return effectiveDisplay === 1
-    ? '1 highlight đạt chuẩn'
-    : `${effectiveDisplay} highlight đạt chuẩn`
+    ? '1 highlight từ backend'
+    : `${effectiveDisplay} highlight từ backend`
 })
 </script>
 
@@ -841,18 +712,6 @@ const highlightSummary = computed(() => {
 .scene-viewer__timeline {
   background: #f1f5f9;
 }
-
-.scene-viewer__notice {
-  margin: 0 0 0.75rem;
-  padding: 0.75rem 1rem;
-  border-radius: 0.65rem;
-  border: 1px solid rgba(37, 99, 235, 0.2);
-  background: rgba(37, 99, 235, 0.08);
-  color: #1d4ed8;
-  font-size: 0.85rem;
-  line-height: 1.4;
-}
-
 
 .scene-viewer__timeline summary {
   cursor: pointer;

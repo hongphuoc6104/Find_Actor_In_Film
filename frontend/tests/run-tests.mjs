@@ -147,34 +147,24 @@ assert(
       ],
     })
 
-    assert(Array.isArray(entry.merged_highlights), 'Merged highlight array should be present')
+    assert(Array.isArray(entry.highlights), 'Highlight array should be preserved from the backend')
+    assert.equal(entry.highlights.length, 3, 'All backend highlights should remain available')
+    assert.equal(entry.highlight_total, 3, 'Highlight totals should default to the backend highlight count when missing')
     assert.equal(
-      entry.merged_highlights.length,
-      2,
-      'Highlights within merge gap should collapse into fewer segments',
-    )
-
-    const [firstSegment, secondSegment] = entry.merged_highlights
-    assert.equal(firstSegment.start, 5, 'Merged segment should begin at earliest start time')
-    assert.equal(firstSegment.end, 8, 'Merged segment should extend to the furthest end within the cluster')
-    assert.equal(
-      secondSegment.start,
-      38,
-      'Isolated short highlight should be padded backwards within bounds',
-    )
-    assert.equal(
-      secondSegment.end,
-      42.5,
-      'Isolated short highlight should be padded forwards within bounds',
+      entry.highlight_display_count,
+      3,
+      'Display counts should default to the backend highlight count when missing',
     )
 
     const debugInvocation = captured.find(
       (args) => Array.isArray(args) && typeof args[0] === 'string' && args[0].includes('DEBUG_HL'),
     )
-    assert(debugInvocation, 'DEBUG_HL logging should be emitted when merging highlights')
+    assert(debugInvocation, 'DEBUG_HL logging should be emitted when recording backend highlights')
+    assert(debugInvocation?.[0]?.includes('ensureFrameMetadata'), 'Highlight debug log should tag ensureFrameMetadata')
     const payload = debugInvocation?.[1]
-    assert.equal(payload?.rawCount, 3, 'Debug log should include the raw highlight count')
-    assert.equal(payload?.mergedCount, 2, 'Debug log should include the merged highlight count')
+    assert.equal(payload?.highlightCount, 3, 'Debug log should include the highlight count received from the backend')
+    assert.equal(payload?.reportedTotal ?? null, null, 'Debug log should include the reported total when provided')
+    assert.equal(payload?.reportedDisplay ?? null, null, 'Debug log should include the reported display count when provided')
   } finally {
     console.debug = originalDebug
   }
@@ -187,73 +177,33 @@ const sceneViewerPath = resolve(dirname(fileURLToPath(import.meta.url)), '../src
 const sceneViewerSource = await readFile(sceneViewerPath, 'utf-8')
 
 assert(
-  sceneViewerSource.includes('computeSegmentSeekStart(effectiveHighlights.value[0])') ||
-    sceneViewerSource.includes('computeSegmentSeekStart(filteredHighlights.value[0])'),
+  sceneViewerSource.includes('const availableHighlights = computed(() => {'),
+  'Scene viewer should read highlight data directly from the backend payload',
+)
+
+assert(
+  sceneViewerSource.includes('computeSegmentSeekStart(availableHighlights.value[0])'),
   'Scene viewer should prioritise highlight starts using the padded seek helper when highlights are available',
+)
+
+assert(
+  sceneViewerSource.includes("console.debug('DEBUG_HL SceneViewer menu'"),
+  'Scene viewer should emit DEBUG_HL logs when rendering the highlight menu',
+)
+
+assert(
+  !sceneViewerSource.includes('filtered_highlights') && !sceneViewerSource.includes('merged_highlights'),
+  'Scene viewer should no longer reference client-side merged or filtered highlights',
+)
+
+assert(
+  !sceneViewerSource.includes('scene-viewer__notice'),
+  'Scene viewer should no longer render the filtered highlight diagnostic banner',
 )
 
 assert(
   !sceneViewerSource.includes('clip_offset') && !sceneViewerSource.includes('clip_url'),
   'Scene viewer should not reference clip-based offsets when seeking in the video',
-)
-
-assert(
-  sceneViewerSource.includes('const targetTime = computeSegmentSeekStart(segment)'),
-  'Selecting a highlight should compute a padded seek target before seeking',
-)
-
-assert(
-  sceneViewerSource.includes('Array.isArray(scene.filtered_highlights)'),
-  'Scene viewer should prioritise pre-filtered highlights when provided by the backend',
-)
-
-assert(
-  sceneViewerSource.includes('const filteredHighlightsRes = computed(() => {'),
-  'Scene viewer should compute highlight filtering metadata via the helper result structure',
-)
-
-assert(
-  sceneViewerSource.includes('const mergedHighlights = computed(() => {'),
-  'Scene viewer should expose merged highlight timelines when provided by the backend',
-)
-
-
-assert(
-  sceneViewerSource.includes('const rawHighlights = computed(() => {'),
-  'Scene viewer should expose raw highlights for rescue rendering when filtering removes all items',
-)
-
-assert(
-  sceneViewerSource.includes('const effectiveHighlights = computed(() => {'),
-  'Scene viewer should expose a fallback highlight list when filtered highlights are empty',
-)
-
-assert(
-  sceneViewerSource.includes('if (mergedHighlights.value.length)'),
-  'Scene viewer highlight pipeline should prefer merged highlight spans when available',
-)
-
-assert(
-  sceneViewerSource.includes('const filterDiagnosticMessage = computed(() => {'),
-  'Scene viewer should surface diagnostic messaging when highlights are filtered out',
-)
-
-assert(
-  sceneViewerSource.includes('scene-viewer__notice') &&
-    sceneViewerSource.includes('Không có highlight đạt chuẩn sau khi áp dụng bộ lọc'),
-  'Scene viewer should render a diagnostic banner when no highlights survive filtering',
-)
-
-assert(
-  sceneViewerSource.includes('Đang hiển thị danh sách highlight gốc'),
-  'Scene viewer should explain that raw highlights are displayed when filters remove all items',
-)
-
-assert(
-  sceneViewerSource.includes("formatReason(reasons.score, 'Điểm')") &&
-    sceneViewerSource.includes("formatReason(reasons.det_score, 'Điểm phát hiện')") &&
-    sceneViewerSource.includes("formatReason(reasons.duration, 'Độ dài')"),
-  'Diagnostic banner should enumerate score, detection score, and duration thresholds',
 )
 
 assert(
@@ -273,11 +223,6 @@ assert(
   'Scene viewer should subtract the configured seek pad when determining highlight starts',
 )
 
-assert(
-  sceneViewerSource.includes('MIN_VIEWABLE_SEC') ||
-    sceneViewerSource.includes('isWithinSegmentWindow'),
-  'Scene viewer should skip auto-pausing highlights shorter than the configured threshold',
-)
 
 assert(
   sceneViewerSource.includes('PAUSE_TOLERANCE_SEC'),
@@ -443,136 +388,6 @@ assert.equal(
 
 console.log('Asset URL helper tests passed.')
 
-const clientFilteredScene = ensureFrameMetadata({
-  highlights: [
-    { id: 'h1', start: 10, end: 14, score: 0.8 },
-  ],
-  highlight_support: { det_score_threshold: 0.75, min_duration: 4, highlight_count: 1 },
-})
-
-assert.equal(
-  clientFilteredScene.filtered_highlights.length,
-  1,
-  'Scenes with only raw highlights should be filtered on the client',
-)
-assert.equal(
-  clientFilteredScene.highlight_display_count,
-  1,
-  'Filtered highlight counts should reflect the number of accepted segments',
-)
-assert.equal(
-  clientFilteredScene.filtered_highlights[0].id,
-  'h1',
-  'Client-side filtering should retain highlight metadata',
-)
-
-assert.equal(
-  clientFilteredScene.highlight_support.highlight_count,
-  1,
-  'Client-side filtering should preserve highlight support counts from the backend',
-)
-assert(clientFilteredScene.__fh_stats, 'Client-side filtering should expose highlight stats metadata')
-assert.equal(
-  clientFilteredScene.__fh_stats.reasons.duration,
-  4,
-  'Client-side stats should record the duration threshold',
-)
-assert.equal(
-  clientFilteredScene.__fh_stats.reasons.score,
-  0.75,
-  'Client-side stats should record the score threshold',
-)
-assert.equal(
-  clientFilteredScene.__fh_stats.reasons.det_score,
-  0.75,
-  'Client-side stats should record the detection score threshold',
-)
-
-const filterExhaustedScene = ensureFrameMetadata({
-  highlights: [
-    { id: 'raw-1', start: 0, end: 2.5, max_score: 0.5 },
-    { id: 'raw-2', start: 4, end: 6, max_score: 0.55 },
-  ],
-  highlight_support: { det_score_threshold: 0.9, min_duration: 4, highlight_count: 2 },
-})
-
-assert.equal(
-  filterExhaustedScene.filtered_highlights.length,
-  0,
-  'Scenes should report zero filtered highlights when entries do not meet thresholds',
-)
-assert.equal(
-  filterExhaustedScene.highlight_display_count,
-  0,
-  'Scenes should surface a filtered count of zero when filters remove all highlights',
-)
-assert.equal(
-  filterExhaustedScene.highlights.length,
-  2,
-  'Scenes should retain the raw highlight list when falling back to original data',
-)
-assert.equal(
-  filterExhaustedScene.highlight_support.highlight_count,
-  2,
-  'Scenes should retain highlight support counts even when filtering removes all highlights',
-)
-assert(filterExhaustedScene.__fh_stats, 'Scenes should retain highlight filter statistics when filters return no entries')
-assert.equal(
-  filterExhaustedScene.__fh_stats.outCount,
-  2,
-  'Scenes should report the number of highlights removed by filtering',
-)
-assert.equal(
-  filterExhaustedScene.__fh_stats.reasons.score,
-  0.9,
-  'Filter stats should expose the score threshold used when removing highlights',
-)
-assert.equal(
-  filterExhaustedScene.__fh_stats.reasons.det_score,
-  0.9,
-  'Filter stats should expose the detection score threshold used when removing highlights',
-)
-assert.equal(
-  filterExhaustedScene.__fh_stats.reasons.duration,
-  4,
-  'Filter stats should expose the duration threshold used when removing highlights',
-)
-
-const preferredFilteredScene = ensureFrameMetadata({
-  highlights: [],
-  filtered_highlights: [
-    { id: 'h2', start: 5, end: 9, score: 0.82 },
-  ],
-  highlight_support: { det_score_threshold: 0.75, min_duration: 4 },
-  highlight_total: 3,
-})
-
-assert.equal(
-  preferredFilteredScene.highlights.length,
-  0,
-  'Scenes should preserve empty raw highlight lists when sent from the backend',
-)
-assert.equal(
-  preferredFilteredScene.filtered_highlights.length,
-  1,
-  'Scenes should rely on backend-provided filtered highlight lists when available',
-)
-assert.equal(
-  preferredFilteredScene.highlight_display_count,
-  1,
-  'Backend filtered highlight counts should surface through scene metadata',
-)
-assert.equal(
-  preferredFilteredScene.highlight_total,
-  3,
-  'Scene metadata should preserve backend highlight totals when provided',
-)
-assert.equal(
-  preferredFilteredScene.filtered_highlights[0].id,
-  'h2',
-  'Backend filtered highlight metadata should be passed through intact',
-)
-
 const highlightStore = useRecognitionStore()
 highlightStore.resetSearch()
 highlightStore.state.movies = [
@@ -645,18 +460,13 @@ assert.equal(
 )
 assert.equal(
   highlightStore.state.scenes[highlightKey].highlight_display_count,
-  1,
-  'Scene cache should expose filtered highlight counts',
+  2,
+  'Scene cache should surface backend highlight counts when they are not provided explicitly',
 )
 assert.equal(
   highlightStore.state.movies[0].characters[0].scene.highlights.length,
     2,
   'Character scene should retain the raw highlight list from the backend',
-)
-assert.equal(
-  highlightStore.state.movies[0].characters[0].scene.filtered_highlights.length,
-  1,
-  'Character scene should expose a single filtered highlight segment',
 )
 assert.equal(
   highlightStore.state.movies[0].characters[0].scene.highlight_total,
@@ -665,8 +475,8 @@ assert.equal(
 )
 assert.equal(
   highlightStore.state.movies[0].characters[0].scene.highlight_display_count,
-  1,
-  'Character scene should expose filtered highlight counts',
+  2,
+  'Character scene should expose the backend highlight count',
 )
 assert.equal(
   highlightStore.state.movies[0].characters[0].has_more_scenes,
@@ -703,7 +513,7 @@ assert.equal(
 assert.equal(
   highlightStore.state.scenes[highlightKey].highlight_display_count,
   1,
-  'Scene cache should continue reporting filtered highlight counts',
+  'Scene cache should reflect the highlight count reported for the active scene',
 )
 assert.equal(
   Object.keys(highlightStore.state.scenes[highlightKey].entries).length,
@@ -728,7 +538,7 @@ assert.equal(
 assert.equal(
   highlightStore.state.movies[0].characters[0].highlight_display_count,
   1,
-  'Character metadata should track filtered highlight counts',
+  'Character metadata should update when the backend reports fewer highlights',
 )
 
 highlightStore.resetSearch()
@@ -752,8 +562,8 @@ assert.equal(
 )
 assert.equal(
   backendHighlightMeta.highlight_display_count,
-  2,
-  'ensureFrameMetadata should report filtered highlight counts',
+  3,
+  'ensureFrameMetadata should surface the backend highlight count when provided',
 )
 
 const relaxedHighlightMeta = ensureFrameMetadata({
@@ -821,9 +631,6 @@ const createSceneEntry = (index, nextCursor, hasMore) => ({
     source_scene_index: index,
     highlights: [
       { id: `h-${index}`, start: index * 10, end: index * 10 + 5, max_score: 0.9 },
-    ],
-    filtered_highlights: [
-      { id: `fh-${index}`, start: index * 10, end: index * 10 + 5, score: 0.9 },
     ],
   },
 })
@@ -1007,9 +814,6 @@ const interactionScene = (index, nextCursor, hasMore) => ({
     source_scene_index: index,
     highlights: [
       { id: `nav-${index}`, start: index * 5, end: index * 5 + 3, max_score: 0.85 },
-    ],
-    filtered_highlights: [
-      { id: `filtered-${index}`, start: index * 5, end: index * 5 + 3, score: 0.85 },
     ],
   },
 })
