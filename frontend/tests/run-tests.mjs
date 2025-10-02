@@ -230,8 +230,10 @@ assert(
 
 
 assert(
-  sceneViewerSource.includes('video.currentTime = targetTime'),
-  'Video playback should seek to the computed padded timestamp',
+  sceneViewerSource.includes(
+    'const { applied, readyState, appliedTime, error } = attemptVideoSeek(',
+  ),
+  'Video playback should validate seek readiness before clearing the pending seek state',
 )
 
 assert(
@@ -274,6 +276,119 @@ assert(
     'Highlight stats should fall back to the available highlight count when backend display totals are missing',
   )
 }
+
+{
+  const sceneViewerModuleUrl = await compileVueModuleUrl(sceneViewerPath)
+  const { createApp, nextTick } = await import(vueModuleUrl)
+  const { default: SceneViewer } = await import(sceneViewerModuleUrl)
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+
+  const app = createApp(SceneViewer, {
+    scene: {
+      video_url: '/video.mp4',
+      highlights: [
+        { id: 'pending', start: 12, end: 16 },
+      ],
+    },
+  })
+
+  const originalDebug = console.debug
+  const debugEvents = []
+  console.debug = (...args) => {
+    debugEvents.push(args)
+  }
+
+  try {
+    app.mount(container)
+    await nextTick()
+
+    const video = container.querySelector('video')
+    assert(video, 'Video element should be rendered for pending seek handling tests')
+
+    let readyState = 0
+    Object.defineProperty(video, 'readyState', {
+      get: () => readyState,
+      set: (value) => {
+        readyState = value
+      },
+      configurable: true,
+    })
+
+    let shouldThrow = true
+    let internalCurrentTime = 0
+    Object.defineProperty(video, 'currentTime', {
+      get: () => internalCurrentTime,
+      set: (value) => {
+        if (shouldThrow) {
+          throw new Error('Metadata not loaded')
+        }
+        internalCurrentTime = value
+      },
+      configurable: true,
+    })
+
+    if (typeof video.play !== 'function') {
+      video.play = () => {}
+    }
+
+    const timelineItem = container.querySelector('.scene-viewer__timeline-item')
+    assert(
+      timelineItem,
+      'Highlight timeline entry should be available for triggering seek requests',
+    )
+
+    timelineItem.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await nextTick()
+
+    const instance = app._instance
+    const pendingRef = instance?.exposed?.pendingSeekTime
+    assert(
+      pendingRef,
+      'Pending seek ref should be exposed from the component for targeted playback testing',
+    )
+
+    assert.equal(
+      pendingRef.value,
+      12,
+      'Pending seek should remain set when the video element rejects the initial seek request',
+    )
+
+    const awaitingLog = debugEvents.find(
+      (args) =>
+        Array.isArray(args) &&
+        args[0] === 'DEBUG_HL SceneViewer playback' &&
+        args[1]?.event === 'seek-awaiting-metadata',
+    )
+    assert(
+      awaitingLog,
+      'Seek awaiting metadata debug log should be emitted when a seek cannot be applied immediately',
+    )
+
+    shouldThrow = false
+    readyState = 1
+
+    instance.exposed.onVideoLoadedMetadata({ target: video })
+    await nextTick()
+
+    assert.equal(
+      pendingRef.value,
+      null,
+      'Pending seek should clear once metadata loading applies the requested timestamp',
+    )
+    assert.equal(
+      video.currentTime,
+      12,
+      'Video currentTime should match the requested seek after metadata becomes available',
+    )
+  } finally {
+    console.debug = originalDebug
+    app.unmount()
+    container.remove()
+  }
+}
+
 
 
 console.log('Scene viewer QA checks passed.')

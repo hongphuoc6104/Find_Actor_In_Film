@@ -119,6 +119,40 @@ const logHighlightDebug = (event, payload = {}) => {
   }
 }
 
+const attemptVideoSeek = (video, targetTime) => {
+  if (!video || !Number.isFinite(targetTime)) {
+    return {
+      applied: false,
+      readyState: video?.readyState ?? null,
+      appliedTime: video?.currentTime ?? null,
+      error: null,
+    }
+  }
+
+  let error = null
+  try {
+    video.currentTime = targetTime
+  } catch (err) {
+    error = err
+  }
+
+  const readyState = Number(video?.readyState ?? 0)
+  const appliedTime = Number(video?.currentTime ?? NaN)
+  const matchedTarget =
+    Number.isFinite(appliedTime) && Math.abs(appliedTime - Number(targetTime)) < 0.05
+  const applied =
+    !error &&
+    ((Number.isFinite(readyState) && readyState >= 1) || matchedTarget)
+
+  return {
+    applied,
+    readyState: Number.isFinite(readyState) ? readyState : null,
+    appliedTime: Number.isFinite(appliedTime) ? appliedTime : null,
+    error,
+  }
+}
+
+
 const parseIndexValue = (value) => {
   const parsed = Number(value)
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
@@ -486,17 +520,34 @@ const seekToSegment = (segment) => {
   const video = videoRef.value
   if (!video) return
 
-  try {
-    video.currentTime = targetTime
-  } catch {}
-  pendingSeekTime.value = null
+  const { applied, readyState, appliedTime, error } = attemptVideoSeek(
+    video,
+    targetTime,
+  )
+
+  if (applied) {
+    pendingSeekTime.value = null
+  } else {
+    logHighlightDebug('seek-awaiting-metadata', {
+      segmentId: segment.id ?? null,
+      targetTime,
+      readyState,
+      appliedTime,
+      error: error ? String(error?.message ?? error) : null,
+    })
+  }
   logHighlightDebug('seek', {
     segmentId: segment.id ?? null,
     start: segment.start ?? null,
     end: segment.end ?? null,
     targetTime,
+    readyState,
+    appliedTime,
+    pending: pendingSeekTime.value !== null,
   })
-  video.play()
+  if (applied && typeof video.play === 'function') {
+    video.play()
+  }
 }
 
 const onVideoTimeUpdate = (e) => {
@@ -641,10 +692,30 @@ const onVideoLoadedMetadata = (e) => {
   videoSize.width = video.videoWidth
   videoSize.height = video.videoHeight
   const targetTime = pendingSeekTime.value ?? sceneStartTime.value
-  if (Number.isFinite(targetTime)) video.currentTime = targetTime
-  pendingSeekTime.value = null
+  if (Number.isFinite(targetTime)) {
+    const { applied, readyState, appliedTime, error } = attemptVideoSeek(
+      video,
+      targetTime,
+    )
+    if (applied) {
+      pendingSeekTime.value = null
+    } else {
+      logHighlightDebug('seek-awaiting-metadata', {
+        segmentId: activeSegment.value?.id ?? null,
+        targetTime,
+        readyState,
+        appliedTime,
+        error: error ? String(error?.message ?? error) : null,
+      })
+    }
+  }
   videoTime.value = video.currentTime ?? 0
 }
+
+defineExpose({
+  pendingSeekTime,
+  onVideoLoadedMetadata,
+})
 
 const highlightSummary = computed(() => {
   const { display, total, count } = highlightStats.value
