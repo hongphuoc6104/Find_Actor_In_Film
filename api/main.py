@@ -8,7 +8,7 @@ import os
 import shutil
 import tempfile
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
 
 from fastapi import (
@@ -454,13 +454,44 @@ def _convert_scene_entry(
         # converted["video_source"] = video_source
         # video_url = _build_video_url(video_source)
         raw_video_source = video_source
-        normalized_source = raw_video_source.replace("\\", "/")
-        served_name = os.path.basename(normalized_source)
+        normalized_source = raw_video_source.replace("\\", "/").strip()
+        safe_relative: str | None = None
+
+        if normalized_source:
+            if VIDEO_ROOT is not None:
+                try:
+                    root_path = VIDEO_ROOT.resolve()
+                    candidate_path = Path(normalized_source)
+                    if candidate_path.is_absolute():
+                        resolved_candidate = candidate_path.resolve()
+                    else:
+                        resolved_candidate = (root_path / candidate_path).resolve()
+                    safe_relative = resolved_candidate.relative_to(root_path).as_posix()
+                except (OSError, RuntimeError, ValueError):
+                    safe_relative = None
+
+            if safe_relative is None and normalized_source:
+                pure_path = PurePosixPath(normalized_source)
+                cleaned_parts: list[str] = []
+                unsafe = False
+                for part in pure_path.parts:
+                    if part in ("", "."):
+                        continue
+                    if part == ".." or (
+                        len(part) == 2 and part[1] == ":" and part[0].isalpha()
+                    ):
+                        unsafe = True
+                        break
+                    cleaned_parts.append(part)
+                if not unsafe and cleaned_parts:
+                    safe_relative = PurePosixPath(*cleaned_parts).as_posix()
+
+        served_name = safe_relative or os.path.basename(normalized_source)
         if not served_name:
             served_name = normalized_source
-        if normalized_source != served_name:
+        if safe_relative is None and normalized_source and normalized_source != served_name:
             logger.debug(
-                "Normalising video source '%s' to basename '%s'",
+                "Falling back to basename for unsafe video source '%s' -> '%s'",
                 raw_video_source,
                 served_name,
             )

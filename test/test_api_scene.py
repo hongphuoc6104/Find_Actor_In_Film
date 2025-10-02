@@ -60,8 +60,8 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
     clip_file.write_bytes(b"clip-bytes")
 
     video_rel = os.path.join(movie_folder, "movie.mp4")
-    video_basename = os.path.basename(video_rel)
-    video_file = videos_root / video_basename
+    video_rel_posix = video_rel.replace(os.sep, "/")
+    video_file = videos_root / video_rel
     video_file.parent.mkdir(parents=True, exist_ok=True)
     video_file.write_bytes(b"video-bytes")
 
@@ -139,7 +139,7 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             assert scene["frame"].startswith(main.FRAMES_ROUTE)
             assert scene.get("frame_url", "").startswith(main.FRAMES_ROUTE)
             assert scene.get("frame_name") == frame_name
-            expected_video_url = f"{main.VIDEOS_ROUTE}/{video_basename}"
+            expected_video_url = f"{main.VIDEOS_ROUTE}/{video_rel_posix}"
             assert scene.get("video_url") == expected_video_url
             assert scene.get("video_source") == expected_video_url
             assert scene.get("start_time") == 12.5
@@ -182,7 +182,7 @@ def test_scene_endpoint_normalises_windows_video_source(tmp_path, monkeypatch):
     (frames_root / movie_folder).mkdir(parents=True, exist_ok=True)
     (frames_root / movie_folder / frame_name).write_bytes(b"frame")
 
-    video_file = videos_root / video_basename
+    video_file = videos_root / "nested" / "folder" / video_basename
     video_file.parent.mkdir(parents=True, exist_ok=True)
     video_file.write_bytes(b"video-bytes")
 
@@ -233,7 +233,7 @@ def test_scene_endpoint_normalises_windows_video_source(tmp_path, monkeypatch):
             payload = response.json()
 
             scene = payload["scene"]
-            expected_video_url = f"{main.VIDEOS_ROUTE}/{video_basename}"
+            expected_video_url = f"{main.VIDEOS_ROUTE}/nested/folder/{video_basename}"
             assert scene.get("video_url") == expected_video_url
             assert scene.get("video_source") == expected_video_url
 
@@ -241,8 +241,8 @@ def test_scene_endpoint_normalises_windows_video_source(tmp_path, monkeypatch):
             assert good_response.status_code == 200
 
             nested_path = windows_video_path.replace("\\", "/")
-            bad_response = client.get(f"{main.VIDEOS_ROUTE}/{nested_path}")
-            assert bad_response.status_code == 404
+            nested_response = client.get(f"{main.VIDEOS_ROUTE}/{nested_path}")
+            assert nested_response.status_code == 200
     finally:
         main._clear_character_cache()
 
