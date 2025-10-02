@@ -1,12 +1,80 @@
 import assert from 'node:assert/strict'
 import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
+import { JSDOM } from 'jsdom'
+import { parse, compileScript } from '@vue/compiler-sfc'
 import { pickActiveTimelineEntry } from '../src/utils/sceneTimeline.js'
 import { toAbsoluteAssetUrl, __test__ as assetUrlTest } from '../src/utils/assetUrls.js'
-import { useRecognitionStore, __test__ } from '../src/composables/useRecognitionStore.js'
 import { __test__ as configTest } from '../src/utils/config.js'
+
+const initialDom = new JSDOM('<!doctype html><html><body></body></html>')
+globalThis.window = initialDom.window
+globalThis.document = initialDom.window.document
+globalThis.navigator = initialDom.window.navigator
+globalThis.HTMLElement = initialDom.window.HTMLElement
+globalThis.SVGElement = initialDom.window.SVGElement
+globalThis.Element = initialDom.window.Element
+globalThis.Node = initialDom.window.Node
+globalThis.Document = initialDom.window.Document
+globalThis.XMLSerializer = initialDom.window.XMLSerializer
+globalThis.getComputedStyle = initialDom.window.getComputedStyle.bind(initialDom.window)
+if (!globalThis.URL) {
+  globalThis.URL = initialDom.window.URL
+}
+if (!globalThis.URL.createObjectURL) {
+  globalThis.URL.createObjectURL = () => 'blob:mock'
+}
+if (!globalThis.URL.revokeObjectURL) {
+  globalThis.URL.revokeObjectURL = () => {}
+}
+
+const { useRecognitionStore, __test__ } = await import(
+  '../src/composables/useRecognitionStore.js'
+)
 const { normaliseMovies, ensureFrameMetadata } = __test__
+
+const buildDataModule = (code) => {
+  const base64 = Buffer.from(code, 'utf-8').toString('base64')
+  return `data:text/javascript;base64,${base64}`
+}
+
+const require = createRequire(import.meta.url)
+const vueRuntimeUrl = pathToFileURL(
+  require.resolve('vue/dist/vue.runtime.esm-bundler.js'),
+).href
+
+const compileVueModuleUrl = async (filePath, replacements = {}) => {
+  const source = await readFile(filePath, 'utf-8')
+  const { descriptor } = parse(source, { filename: filePath })
+  const script = compileScript(descriptor, { id: filePath, inlineTemplate: true })
+  let code = script.content
+
+  if (vueRuntimeUrl) {
+    code = code.split("from 'vue'").join(`from '${vueRuntimeUrl}'`)
+    code = code.split('from "vue"').join(`from "${vueRuntimeUrl}"`)
+  }
+
+  for (const [original, replacement] of Object.entries(replacements)) {
+    const singleQuoted = `'${original}'`
+    const doubleQuoted = `"${original}"`
+    if (code.includes(singleQuoted)) {
+      code = code.split(singleQuoted).join(`'${replacement}'`)
+    }
+    if (code.includes(doubleQuoted)) {
+      code = code.split(doubleQuoted).join(`"${replacement}"`)
+    }
+  }
+
+  code = code.replace(/from ['"](\.\.?(?:\/[\w.-]+)+)['"]/g, (match, relPath) => {
+    const absolutePath = resolve(dirname(filePath), relPath)
+    const fileUrl = pathToFileURL(absolutePath).href
+    return match.replace(relPath, fileUrl)
+  })
+
+  return buildDataModule(code)
+}
 
 const samplePayload = [
   {
@@ -645,3 +713,325 @@ assert.equal(
 )
 
 console.log('Highlight threshold synchronisation tests passed.')
+
+highlightStore.resetSearch()
+
+highlightStore.state.movies = [
+  {
+    movie_id: 'nav-movie',
+    movie: 'Navigation Movie',
+    characters: [
+      {
+        movie_id: 'nav-movie',
+        character_id: 'nav-character',
+        scene: null,
+        scene_index: null,
+        next_scene_cursor: null,
+        total_scenes: null,
+        has_more_scenes: false,
+        decisionHistory: [],
+        verificationStatus: null,
+        highlight_total: null,
+        highlight_display_count: 0,
+      },
+    ],
+  },
+]
+
+highlightStore.state.selectedMovieId = 'nav-movie'
+highlightStore.state.selectedCharacterId = 'nav-character'
+
+const navKey = 'nav-movie::nav-character'
+
+const createSceneEntry = (index, nextCursor, hasMore) => ({
+  movie_id: 'nav-movie',
+  character_id: 'nav-character',
+  scene_index: index,
+  next_cursor: nextCursor,
+  total_scenes: 3,
+  highlight_total: 3,
+  highlight_display_count: 3,
+  has_more: hasMore,
+  scene: {
+    scene_index: index,
+    highlight_index: index,
+    highlight_total: 3,
+    highlight_display_count: 3,
+    source_scene_index: index,
+    highlights: [
+      { id: `h-${index}`, start: index * 10, end: index * 10 + 5, max_score: 0.9 },
+    ],
+    filtered_highlights: [
+      { id: `fh-${index}`, start: index * 10, end: index * 10 + 5, score: 0.9 },
+    ],
+  },
+})
+
+highlightStore.updateSceneEntry(createSceneEntry(0, 1, true))
+highlightStore.updateSceneEntry(createSceneEntry(1, 2, true))
+highlightStore.updateSceneEntry(createSceneEntry(2, null, false))
+
+assert.equal(
+  Object.keys(highlightStore.state.scenes[navKey].entries).length,
+  3,
+  'Scene cache should retain all loaded cursor entries',
+)
+
+assert.equal(
+  highlightStore.currentSceneNavigation.value.knownCount,
+  3,
+  'Navigation metadata should report the number of cached highlights',
+)
+
+assert.equal(
+  highlightStore.currentSceneNavigation.value.index,
+  2,
+  'Latest update should advance the active cursor index',
+)
+
+await highlightStore.loadSceneAtIndex('nav-movie', 'nav-character', 0)
+
+assert.equal(
+  highlightStore.currentSceneNavigation.value.index,
+  0,
+  'loadSceneAtIndex should jump to the requested cursor when cached',
+)
+
+await highlightStore.loadSceneAtIndex('nav-movie', 'nav-character', 1)
+
+assert.equal(
+  highlightStore.currentSceneNavigation.value.index,
+  1,
+  'Subsequent navigation should advance to the second highlight',
+)
+
+assert.equal(
+  highlightStore.state.movies[0].characters[0].scene.scene_index,
+  1,
+  'Active character scene metadata should follow the navigation index',
+)
+
+await highlightStore.loadSceneAtIndex('nav-movie', 'nav-character', 2)
+
+assert.equal(
+  highlightStore.currentSceneNavigation.value.index,
+  2,
+  'Navigation should reach the final cached highlight entry',
+)
+
+assert.equal(
+  highlightStore.currentSceneNavigation.value.hasMore,
+  false,
+  'Navigation metadata should report when no further highlights are available',
+)
+
+const missingHighlight = await highlightStore.loadSceneAtIndex(
+  'nav-movie',
+  'nav-character',
+  3,
+)
+
+assert.equal(missingHighlight, null, 'Out-of-range navigation should not resolve a scene')
+assert(
+  highlightStore.state.sceneError,
+  'Store should surface an error when navigating beyond known highlights',
+)
+
+highlightStore.resetSearch()
+
+console.log('Highlight cursor navigation tests passed.')
+
+const dom = new JSDOM('<!doctype html><html><body></body></html>')
+globalThis.window = dom.window
+globalThis.document = dom.window.document
+globalThis.navigator = dom.window.navigator
+globalThis.HTMLElement = dom.window.HTMLElement
+globalThis.SVGElement = dom.window.SVGElement
+globalThis.Element = dom.window.Element
+globalThis.Node = dom.window.Node
+globalThis.Document = dom.window.Document
+globalThis.XMLSerializer = dom.window.XMLSerializer
+globalThis.getComputedStyle = dom.window.getComputedStyle.bind(dom.window)
+globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0)
+globalThis.cancelAnimationFrame = (id) => clearTimeout(id)
+if (!globalThis.URL) {
+  globalThis.URL = dom.window.URL
+}
+if (!globalThis.URL.createObjectURL) {
+  globalThis.URL.createObjectURL = () => 'blob:mock'
+}
+if (!globalThis.URL.revokeObjectURL) {
+  globalThis.URL.revokeObjectURL = () => {}
+}
+
+const sceneViewerStubModule = buildDataModule(`
+  import { defineComponent, h } from '${vueRuntimeUrl}';
+  export default defineComponent({
+    name: 'SceneViewerStub',
+    props: {
+      scene: { type: Object, default: null },
+      meta: { type: Object, default: null },
+      highlightIndex: { type: Number, default: null },
+      highlightTotal: { type: Number, default: null },
+    },
+    emits: ['highlight-change'],
+    setup(props) {
+      return () =>
+        h('div', { class: 'scene-viewer-stub' }, [
+          h('span', { class: 'scene-stub__index' }, props.highlightIndex ?? ''),
+          h('span', { class: 'scene-stub__total' }, props.highlightTotal ?? ''),
+          h(
+            'span',
+            { class: 'scene-stub__scene-index' },
+            props.scene && props.scene.scene_index !== undefined
+              ? String(props.scene.scene_index)
+              : '',
+          ),
+        ])
+    },
+  })
+`)
+
+const faceSearchPath = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../src/components/FaceSearch.vue',
+)
+
+const faceSearchModuleUrl = await compileVueModuleUrl(faceSearchPath, {
+  './SceneViewer.vue': sceneViewerStubModule,
+})
+
+const { default: FaceSearchComponent } = await import(faceSearchModuleUrl)
+const { mount } = await import('@vue/test-utils')
+const { nextTick } = await import(vueRuntimeUrl)
+
+highlightStore.resetSearch()
+highlightStore.state.movies = [
+  {
+    movie_id: 'movie-interaction',
+    movie: 'Interaction Test Movie',
+    characters: [
+      {
+        movie_id: 'movie-interaction',
+        character_id: 'char-interaction',
+        scene: null,
+        scene_index: null,
+        next_scene_cursor: null,
+        total_scenes: null,
+        has_more_scenes: false,
+        decisionHistory: [],
+        verificationStatus: null,
+      },
+    ],
+  },
+]
+
+highlightStore.state.selectedMovieId = 'movie-interaction'
+highlightStore.state.selectedCharacterId = 'char-interaction'
+
+const interactionScene = (index, nextCursor, hasMore) => ({
+  movie_id: 'movie-interaction',
+  character_id: 'char-interaction',
+  scene_index: index,
+  next_cursor: nextCursor,
+  total_scenes: 3,
+  highlight_total: 3,
+  highlight_display_count: 3,
+  has_more: hasMore,
+  scene: {
+    scene_index: index,
+    highlight_index: index,
+    highlight_total: 3,
+    highlight_display_count: 3,
+    source_scene_index: index,
+    highlights: [
+      { id: `nav-${index}`, start: index * 5, end: index * 5 + 3, max_score: 0.85 },
+    ],
+    filtered_highlights: [
+      { id: `filtered-${index}`, start: index * 5, end: index * 5 + 3, score: 0.85 },
+    ],
+  },
+})
+
+highlightStore.updateSceneEntry(interactionScene(0, 1, true))
+highlightStore.updateSceneEntry(interactionScene(1, 2, true))
+highlightStore.updateSceneEntry(interactionScene(2, null, false))
+
+await highlightStore.ensureInitialScene('movie-interaction', 'char-interaction')
+
+const wrapper = mount(FaceSearchComponent, { attachTo: document.body })
+
+await nextTick()
+await nextTick()
+
+const labelNode = wrapper.element.querySelector('.face-search__highlight-count')
+assert(labelNode, 'Highlight navigation label should render')
+assert.equal(
+  labelNode.textContent.trim(),
+  'Highlight 1/4',
+  'Initial highlight label should show the first scene out of four known items',
+)
+
+const initialSceneNode = wrapper.element.querySelector('.scene-stub__scene-index')
+assert(initialSceneNode, 'Scene viewer stub should render an index placeholder')
+assert.equal(
+  initialSceneNode.textContent.trim(),
+  '0',
+  'Scene viewer stub should display the first scene index by default',
+)
+
+const highlightButtons = Array.from(
+  wrapper.element.querySelectorAll('.face-search__highlight-button'),
+)
+assert.equal(highlightButtons.length, 2, 'Highlight navigation should render previous and next buttons')
+
+highlightButtons[1].dispatchEvent(new dom.window.Event('click', { bubbles: true }))
+await nextTick()
+
+assert.equal(
+  highlightStore.currentSceneNavigation.value.index,
+  1,
+  'Clicking the next button should advance the store cursor',
+)
+const nextLabelNode = wrapper.element.querySelector('.face-search__highlight-count')
+assert(nextLabelNode, 'Highlight label should remain visible after advancing')
+assert.equal(
+  nextLabelNode.textContent.trim(),
+  'Highlight 2/4',
+  'Highlight label should update after moving forward',
+)
+const forwardSceneNode = wrapper.element.querySelector('.scene-stub__scene-index')
+assert(forwardSceneNode, 'Scene viewer stub should expose an index after advancing')
+assert.equal(
+  forwardSceneNode.textContent.trim(),
+  '1',
+  'Scene viewer stub should receive the updated scene metadata',
+)
+
+highlightButtons[0].dispatchEvent(new dom.window.Event('click', { bubbles: true }))
+await nextTick()
+
+assert.equal(
+  highlightStore.currentSceneNavigation.value.index,
+  0,
+  'Clicking the previous button should move the cursor backwards',
+)
+const previousLabelNode = wrapper.element.querySelector('.face-search__highlight-count')
+assert(previousLabelNode, 'Highlight label should remain visible after navigating back')
+assert.equal(
+  previousLabelNode.textContent.trim(),
+  'Highlight 1/4',
+  'Highlight label should revert after navigating back',
+)
+const backwardSceneNode = wrapper.element.querySelector('.scene-stub__scene-index')
+assert(backwardSceneNode, 'Scene viewer stub should expose an index after navigating back')
+assert.equal(
+  backwardSceneNode.textContent.trim(),
+  '0',
+  'Scene viewer stub should reflect the restored scene metadata',
+)
+
+wrapper.unmount()
+highlightStore.resetSearch()
+
+console.log('FaceSearch highlight interaction tests passed.')
