@@ -253,6 +253,14 @@ def _finalise_highlight(
         if deficit > 0:
             end += deficit
 
+        if end_bound is not None:
+            end = min(end, end_bound)
+            if target_min_duration > 0:
+                max_start_allowed = end - target_min_duration
+                if start > max_start_allowed:
+                    start = max(start_bound, max_start_allowed)
+
+
         if end < start:
             end = start
 
