@@ -116,6 +116,36 @@ def test_highlight_merges_hits_within_gap():
     ) / (0.9 + 0.7)
     assert highlight["score"] == pytest.approx(expected_score, rel=1e-6)
 
+def test_highlight_uses_fallback_score_when_similarity_missing():
+    det_score = DEFAULT_HIGHLIGHT_DET_SCORE + 0.1
+    entries = [
+        {
+            "timestamp": 3.0,
+            "det_score": det_score,
+            "cluster_id": "cluster-A",
+            "final_character_id": "final-1",
+        }
+    ]
+
+    matcher = _make_highlight_matcher("final-1", {"cluster-A"}, DEFAULT_HIGHLIGHT_SIMILARITY)
+    highlights = _build_highlights(
+        entries,
+        det_th=DEFAULT_HIGHLIGHT_DET_SCORE,
+        max_gap=DEFAULT_HIGHLIGHT_GAP_SECONDS,
+        match_fn=matcher,
+        sim_threshold=DEFAULT_HIGHLIGHT_SIMILARITY,
+    )
+
+    assert len(highlights) == 1
+    highlight = highlights[0]
+
+    assert highlight["score"] == pytest.approx(det_score, rel=1e-6)
+    assert highlight.get("score_source") == "fallback_det_score"
+    assert "avg_similarity" not in highlight
+    assert "max_similarity" not in highlight
+    assert "min_similarity" not in highlight
+    assert highlight["match_count"] == 1
+
 
 
 def test_highlight_filters_low_scores_and_limits():

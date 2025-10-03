@@ -278,30 +278,55 @@ def _finalise_highlight(
     weighted_similarity_sum = _to_float(accumulator.get("weighted_similarity_sum"))
 
     score: float | None = None
+    score_source: str | None = None
     if weighted_similarity_sum is not None and weight_sum > 0:
         score = weighted_similarity_sum / weight_sum
+        score_source = "similarity_weighted"
     elif sim_values:
         score = sum(sim_values) / len(sim_values)
+        score_source = "similarity_average"
+
+    match_count = int(accumulator.get("match_count", 0) or 0)
+    matched_clusters = accumulator.get("matched_cluster_ids", set()) or set()
+    matched_final_ids = accumulator.get("matched_final_character_ids", set()) or set()
 
     if score is None or not np.isfinite(score):
-        return None
+        has_matches = bool(match_count) or bool(matched_clusters) or bool(
+            matched_final_ids
+        )
+        fallback_score: float | None = None
+        fallback_source: str | None = None
+
+        if has_matches:
+            if det_scores:
+                fallback_score = max(det_scores)
+                fallback_source = "fallback_det_score"
+            else:
+                fallback_score = float(HIGHLIGHT_MIN_SCORE)
+                fallback_source = "fallback_min_score"
+
+        if fallback_score is None or not np.isfinite(fallback_score):
+            return None
+
+        score = fallback_score
+        score_source = fallback_source
 
     highlight: Dict[str, Any] = {
         "start": round(start, 3),
         "end": round(end, 3),
         "duration": round(duration, 3),
-        "match_count": int(accumulator.get("match_count", 0)),
+        "match_count": match_count,
         "supporting_detections": list(accumulator.get("supporting_detections", [])),
-        "matched_cluster_ids": sorted(accumulator.get("matched_cluster_ids", set())),
-        "matched_final_character_ids": sorted(
-            accumulator.get("matched_final_character_ids", set())
-        ),
+        "matched_cluster_ids": sorted(matched_clusters),
+        "matched_final_character_ids": sorted(matched_final_ids),
         "has_target": True,
     }
 
     score = float(score)
     highlight["score"] = round(score, 6)
     highlight["max_score"] = round(score, 6)
+    if score_source:
+        highlight["score_source"] = score_source
 
     if det_scores:
         highlight["max_det_score"] = max(det_scores)
