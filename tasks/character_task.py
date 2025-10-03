@@ -149,6 +149,23 @@ def _coerce_str_set(value: Any) -> set[str]:
         return set()
     return result
 
+def _load_cluster_metadata(
+    meta_file: str, movie_id: Any, cluster_id: Any
+) -> List[Dict[str, Any]]:
+    try:
+        with open(meta_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        LOGGER.warning(
+            "Failed to read cluster metadata for movie_id=%s cluster_id=%s from %s: %s",
+            movie_id,
+            cluster_id,
+            meta_file,
+            exc,
+        )
+    return []
+
+
 
 def _summarise_detection(
     entry: Dict[str, Any],
@@ -1800,25 +1817,23 @@ def character_task():
                         continue
                     meta_file = os.path.join(cluster_dir, "metadata.json")
                     if os.path.exists(meta_file):
-                        try:
-                            with open(meta_file, "r", encoding="utf-8") as f:
-                                meta_entries = json.load(f)
-                            for entry in meta_entries:
-                                entry = dict(entry)
-                                entry["cluster_id"] = raw_cluster_id
-                                preview_img = entry.get("preview_image")
-                                annotated_img = entry.get("annotated_image")
-                                if preview_img and not os.path.isabs(preview_img):
-                                    entry["preview_image"] = os.path.join(cluster_dir, preview_img)
-                                if annotated_img and not os.path.isabs(annotated_img):
-                                    entry["annotated_image"] = os.path.join(
-                                        cluster_dir, annotated_img
-                                    )
-                                if entry.get("preview_image"):
-                                    preview_paths.append(entry["preview_image"])
-                                preview_entries.append(entry)
-                        except (OSError, json.JSONDecodeError):
-                            pass
+                        meta_entries = _load_cluster_metadata(
+                            meta_file, movie_id, raw_cluster_id
+                        )
+                        for entry in meta_entries:
+                            entry = dict(entry)
+                            entry["cluster_id"] = raw_cluster_id
+                            preview_img = entry.get("preview_image")
+                            annotated_img = entry.get("annotated_image")
+                            if preview_img and not os.path.isabs(preview_img):
+                                entry["preview_image"] = os.path.join(cluster_dir, preview_img)
+                            if annotated_img and not os.path.isabs(annotated_img):
+                                entry["annotated_image"] = os.path.join(
+                                    cluster_dir, annotated_img
+                                )
+                            if entry.get("preview_image"):
+                                preview_paths.append(entry["preview_image"])
+                            preview_entries.append(entry)
                     else:
                         images = [
                             os.path.join(cluster_dir, f)
