@@ -16,6 +16,14 @@ def test_l2_normalize_non_zero_vector():
     expected = v / np.linalg.norm(v)
     assert np.allclose(result, expected)
 
+def test_l2_normalize_matrix_rowwise():
+    matrix = np.array([[3.0, 4.0], [0.0, 0.0]], dtype=np.float32)
+    result = l2_normalize(matrix)
+    expected = matrix.copy()
+    expected[0] = expected[0] / np.linalg.norm(expected[0])
+    assert np.allclose(result[0], expected[0])
+    assert np.allclose(result[1], expected[1])
+
 
 def test_mean_vector_single():
     vec = [np.array([1.0, 2.0, 3.0], dtype=np.float32)]
