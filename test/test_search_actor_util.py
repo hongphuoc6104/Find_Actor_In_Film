@@ -147,3 +147,19 @@ def test_search_actor_preview_paths(monkeypatch, tmp_path):
     assert normalized[1] == preview_abs
     assert normalized[2] == preview_http
     assert normalized[3] == preview_protocol_rel
+
+
+def test_search_actor_returns_empty_when_no_faces(monkeypatch, tmp_path):
+    img_path, _ = _setup_env(tmp_path, monkeypatch)
+
+    class EmptyFaceAnalysis:
+        def prepare(self, *args, **kwargs):
+            pass
+
+        def get(self, img):
+            return []
+
+    monkeypatch.setattr(sa, "FaceAnalysis", lambda *args, **kwargs: EmptyFaceAnalysis())
+
+    assert sa.search_actor(str(img_path), k=1) == {}
+    assert sa.search_actor(str(img_path), k=1, return_emb=True) == {}

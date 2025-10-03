@@ -77,11 +77,11 @@ def search_actor(
 
     img = cv2.imread(image_path)
     if img is None:
-        return {} if return_emb else []
+        return {}
 
     faces = app.get(img)
     if not faces:
-        return {} if return_emb else []
+        return {}
 
     # lấy mặt có det_score cao nhất
     faces.sort(key=lambda f: f.det_score, reverse=True)
