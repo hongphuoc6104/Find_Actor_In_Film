@@ -263,23 +263,30 @@ if SCENE_CLIPS_ROOT:
     )
 
 if VIDEO_ROOT:
-    VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
     try:
-        _derived_video_prefix = VIDEO_ROOT.relative_to(PROJECT_ROOT).as_posix()
-    except ValueError:
-        _derived_video_prefix = None
+        VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
+        try:
+            _derived_video_prefix = VIDEO_ROOT.relative_to(PROJECT_ROOT).as_posix()
+        except ValueError:
+            _derived_video_prefix = None
 
-    if _derived_video_prefix:
-        VIDEO_URL_PREFIX = _derived_video_prefix
-    else:
-        VIDEO_URL_PREFIX = "videos"
+        if _derived_video_prefix:
+            VIDEO_URL_PREFIX = _derived_video_prefix
+        else:
+            VIDEO_URL_PREFIX = "videos"
 
-    VIDEO_MOUNT_ROUTE = f"/{VIDEO_URL_PREFIX.lstrip('/')}"
-    app.mount(
-        VIDEO_MOUNT_ROUTE,
-        StaticFiles(directory=str(VIDEO_ROOT)),
-        name="videos",
-    )
+        VIDEO_MOUNT_ROUTE = f"/{VIDEO_URL_PREFIX.lstrip('/')}"
+        app.mount(
+            VIDEO_MOUNT_ROUTE,
+            StaticFiles(directory=str(VIDEO_ROOT)),
+            name="videos",
+        )
+    except (PermissionError, OSError) as exc:
+        logger.warning(
+            "Unable to configure video static files for %s: %s", VIDEO_ROOT, exc
+        )
+        VIDEO_URL_PREFIX = None
+        VIDEO_MOUNT_ROUTE = None
 else:
     VIDEO_URL_PREFIX = None
     VIDEO_MOUNT_ROUTE = None
