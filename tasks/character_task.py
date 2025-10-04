@@ -243,44 +243,60 @@ def _finalise_highlight(
             available_after = max(end_bound - end, 0.0)
 
         extend_before = min(deficit / 2.0, available_before)
-        start -= extend_before
-        deficit -= extend_before
+        if extend_before > 0:
+            start -= extend_before
+            deficit -= extend_before
 
         extend_after = min(deficit, available_after)
-        end += extend_after
-        deficit -= extend_after
+        if extend_after > 0:
+            end += extend_after
+            deficit -= extend_after
 
         if deficit > 0:
-            end += deficit
+            remaining_before = max(available_before - extend_before, 0.0)
+            extra_before = min(deficit, remaining_before)
+            if extra_before > 0:
+                start -= extra_before
+                deficit -= extra_before
 
-        if end_bound is not None:
-            end = min(end, end_bound)
-            if target_min_duration > 0:
-                max_start_allowed = end - target_min_duration
-                if start > max_start_allowed:
-                    start = max(start_bound, max_start_allowed)
+        if deficit > 0:
+            if end_bound is None:
+                end += deficit
+                deficit = 0.0
+            else:
+                remaining_after = max(end_bound - end, 0.0)
+                extra_after = min(deficit, remaining_after)
+                if extra_after > 0:
+                    end += extra_after
+                    deficit -= extra_after
+
+        start = max(start, start_bound)
+        if end_bound is not None and end > end_bound:
+            end = end_bound
+
+        if target_min_duration > 0:
+            current_duration = end - start
+            if end_bound is None:
+                if current_duration < target_min_duration:
+                    end = start + target_min_duration
+            else:
+                if current_duration < target_min_duration:
+                    desired_end = start + target_min_duration
+                    if desired_end <= end_bound:
+                        end = max(end, desired_end)
+                    else:
+                        end = end_bound
+                        start = max(start_bound, end - target_min_duration)
+
+                end = min(end, end_bound)
+                min_start_allowed = end - target_min_duration
+                if start > min_start_allowed:
+                    start = max(start_bound, min_start_allowed)
 
 
         if end < start:
             end = start
 
-        duration = end - start
-        if duration <= 0 and target_min_duration > 0:
-            proposed_end = start + target_min_duration
-            if end_bound is not None and proposed_end > end_bound:
-                start = max(start_bound, end_bound - target_min_duration)
-                end = max(start, end_bound)
-            else:
-                end = proposed_end
-
-        duration = end - start
-        if duration <= 0 and target_min_duration > 0:
-            proposed_end = start + target_min_duration
-            if end_bound is not None and proposed_end > end_bound:
-                start = max(start_bound, end_bound - target_min_duration)
-                end = max(start, end_bound)
-            else:
-                end = proposed_end
 
         duration = end - start
 

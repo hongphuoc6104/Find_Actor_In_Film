@@ -105,6 +105,39 @@ def test_finalise_highlight_handles_scene_shorter_than_min_duration(monkeypatch)
     assert highlight["duration"] == pytest.approx(1.0)
     assert highlight["duration"] > 0
 
+def test_finalise_highlight_near_timeline_end_respects_bounds(monkeypatch):
+    monkeypatch.setattr(character_module, "HIGHLIGHT_EXTEND_SECONDS", 0.0)
+
+    similarity = DEFAULT_HIGHLIGHT_SIMILARITY + 0.25
+    min_duration = 4.0
+    accumulator = {
+        "start": 9.4,
+        "end": 9.6,
+        "det_scores": [0.95],
+        "similarities": [similarity],
+        "weight_sum": 0.95,
+        "weighted_similarity_sum": 0.95 * similarity,
+        "matched_cluster_ids": {"cluster-A"},
+        "matched_final_character_ids": {"final-1"},
+        "supporting_detections": [],
+        "match_count": 1,
+    }
+
+    highlight = character_module._finalise_highlight(
+        accumulator,
+        timeline_start=0.0,
+        timeline_end=10.0,
+        min_duration=min_duration,
+    )
+
+    assert highlight is not None
+    assert highlight["end"] == pytest.approx(10.0)
+    assert highlight["start"] >= 0.0
+    assert highlight["start"] == pytest.approx(10.0 - min_duration)
+    assert highlight["duration"] == pytest.approx(min_duration)
+
+
+
 
 def test_highlight_merges_hits_within_gap():
     entries = [
