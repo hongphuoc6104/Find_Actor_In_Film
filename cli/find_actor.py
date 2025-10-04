@@ -179,7 +179,9 @@ def main() -> None:
     if "error" in res:
         print(f"Error: {res['error']}")
         return
-    if output_json:
+
+    should_output_json = getattr(args, "json", False)
+    if should_output_json:
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return
 
