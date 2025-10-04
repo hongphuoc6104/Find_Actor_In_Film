@@ -1200,13 +1200,18 @@ def character_task():
     frames_root = storage_cfg.get("frames_root")
     video_root = storage_cfg.get("video_root")
     video_root_path: Path | None = None
+    video_root_prefix: str | None = None
+    project_root = Path(__file__).resolve().parents[1]
     if video_root:
         video_root_path = Path(video_root)
         if not video_root_path.is_absolute():
-            video_root_path = (Path.cwd() / video_root_path).resolve()
+            video_root_path = (project_root / video_root_path).resolve()
         else:
             video_root_path = video_root_path.resolve()
-
+        try:
+            video_root_prefix = video_root_path.relative_to(project_root).as_posix()
+        except ValueError:
+            video_root_prefix = video_root_path.as_posix()
 
     print(f"[Character] Loading clustered data from {clusters_path}...")
 
@@ -1259,19 +1264,44 @@ def character_task():
             candidate = Path(str(path_value))
         except Exception:
             return None
+        resolved_candidate = candidate
+        relative_result: str | None = None
         if video_root_path is not None:
-            if not candidate.is_absolute():
-                candidate = video_root_path / candidate
+            if not resolved_candidate.is_absolute():
+                resolved_candidate = video_root_path / resolved_candidate
             try:
-                candidate = candidate.resolve()
+                resolved_candidate = resolved_candidate.resolve()
             except OSError:
-                candidate = candidate.absolute()
+                resolved_candidate = resolved_candidate.absolute()
             try:
-                relative = candidate.relative_to(video_root_path)
-                return relative.as_posix()
+                relative_result = resolved_candidate.relative_to(
+                    video_root_path
+                ).as_posix()
             except ValueError:
-                return candidate.as_posix()
-        return candidate.as_posix()
+                relative_result = None
+        else:
+            try:
+                resolved_candidate = resolved_candidate.resolve()
+            except OSError:
+                resolved_candidate = resolved_candidate.absolute()
+
+        result_str = relative_result or resolved_candidate.as_posix()
+        if video_root_prefix:
+            prefix = video_root_prefix.rstrip("/")
+            if prefix:
+                prefix_with_slash = f"{prefix}/"
+                if relative_result is not None:
+                    if not (
+                        result_str == prefix
+                        or result_str.startswith(prefix_with_slash)
+                    ):
+                        result_str = f"{prefix}/{result_str.lstrip('/')}"
+                elif not (
+                    result_str == prefix
+                    or result_str.startswith(prefix_with_slash)
+                ) and not Path(result_str).is_absolute():
+                    result_str = f"{prefix}/{result_str.lstrip('/')}"
+        return result_str
 
     metadata_path = storage_cfg.get("metadata_json")
     if metadata_path and os.path.exists(metadata_path):
