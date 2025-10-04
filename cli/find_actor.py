@@ -166,6 +166,7 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+    output_json = getattr(args, "json", False)
     res = run(
         args.image,
         args.sim_threshold,
@@ -178,7 +179,7 @@ def main() -> None:
     if "error" in res:
         print(f"Error: {res['error']}")
         return
-    if args.json:
+    if output_json:
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return
 
