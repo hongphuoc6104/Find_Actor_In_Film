@@ -5,6 +5,7 @@ import os
 import sys
 import types
 from fastapi.testclient import TestClient
+from starlette.routing import Mount
 
 def _stub_insightface(monkeypatch):
     app_module = types.ModuleType("insightface.app")
@@ -123,6 +124,17 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
     main = importlib.import_module("api.main")
 
     try:
+        video_mount = next(
+            (
+                route
+                for route in main.app.routes
+                if isinstance(route, Mount) and route.path == main.VIDEOS_ROUTE
+            ),
+            None,
+        )
+        assert video_mount is not None
+        assert getattr(video_mount.app, "directory", None) == str(videos_root)
+
         with TestClient(main.app) as client:
             response = client.post(
                 "/scene",
