@@ -29,6 +29,8 @@ if (!globalThis.URL.revokeObjectURL) {
   globalThis.URL.revokeObjectURL = () => {}
 }
 
+globalThis.FormData = initialDom.window.FormData
+
 const { useRecognitionStore, __test__ } = await import(
   '../src/composables/useRecognitionStore.js'
 )
@@ -382,6 +384,29 @@ assert(
       12,
       'Video currentTime should match the requested seek after metadata becomes available',
     )
+
+
+    video.pause = () => {
+      throw new Error('Pause failure')
+    }
+
+    video.currentTime = 17
+    video.dispatchEvent(new window.Event('timeupdate'))
+    await nextTick()
+
+    const pauseLog = debugEvents.find(
+      (args) =>
+        Array.isArray(args) &&
+        args[0] === 'DEBUG_HL SceneViewer playback' &&
+        args[1]?.event === 'video-pause-error',
+    )
+    assert(pauseLog, 'Video pause errors should emit a playback debug log for diagnostics')
+    assert.equal(
+      pauseLog?.[1]?.segmentId,
+      'pending',
+      'Video pause error debug log should include the active segment identifier',
+    )
+
   } finally {
     console.debug = originalDebug
     app.unmount()

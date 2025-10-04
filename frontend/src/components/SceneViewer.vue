@@ -326,7 +326,13 @@ const resetVideoState = () => {
     try {
       videoRef.value.pause()
       if (Number.isFinite(safeStart)) videoRef.value.currentTime = safeStart
-    } catch {}
+    } catch (error) {
+      logHighlightDebug('video-reset-error', {
+        sceneId: resolveSceneIdentifier(props.scene),
+        segmentId: activeSegment.value?.id ?? null,
+        error: error ? String(error?.message ?? error) : null,
+      })
+    }
   }
 }
 
@@ -599,7 +605,14 @@ const onVideoTimeUpdate = (e) => {
 
   try {
     video.pause()
-  } catch {}
+  } catch (error) {
+    logHighlightDebug('video-pause-error', {
+      sceneId: resolveSceneIdentifier(props.scene),
+      segmentId: segment.id ?? null,
+      currentTime,
+      error: error ? String(error?.message ?? error) : null,
+    })
+  }
 }
 
 const nextHighlightSegment = computed(() => {
