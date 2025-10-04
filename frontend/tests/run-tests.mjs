@@ -289,7 +289,7 @@ assert(
 
   const app = createApp(SceneViewer, {
     scene: {
-      video_url: '/video.mp4',
+      video_url: 'Data/video/example.mp4',
       highlights: [
         { id: 'pending', start: 12, end: 16 },
       ],
@@ -309,6 +309,30 @@ assert(
     const video = container.querySelector('video')
     assert(video, 'Video element should be rendered for pending seek handling tests')
 
+    const resolvedSrc = video.getAttribute('src')
+    assert.equal(
+      resolvedSrc,
+      'http://localhost:8000/Data/video/example.mp4',
+      'Scene viewer should resolve relative video paths against the API host',
+    )
+
+    const srcUrl = new URL(video.src)
+    assert.equal(
+      srcUrl.pathname,
+      '/Data/video/example.mp4',
+      'Scene viewer should preserve the backend-provided video path when normalising',
+    )
+    assert.equal(
+      srcUrl.origin,
+      'http://localhost:8000',
+      'Scene viewer video paths should be anchored to the API origin',
+    )
+    assert(!srcUrl.pathname.includes('/videos/'), 'Scene viewer should not reintroduce legacy /videos/ prefixes')
+    assert.equal(
+      srcUrl.pathname.split('Data/video').length - 1,
+      1,
+      'Scene viewer should not duplicate Data/video segments while normalising the video source',
+    )
     let readyState = 0
     Object.defineProperty(video, 'readyState', {
       get: () => readyState,
@@ -527,7 +551,7 @@ const normalisedMetadata = ensureFrameMetadata({
   frame: '/frames/example.jpg',
   preview_image: 'previews/example.jpg',
   clip_url: '/clips/example.mp4',
-  video_url: '/videos/example.mp4',
+  video_url: 'Data/video/example.mp4',
   timeline: [
     {
       frame_url: 'frames/nested.jpg',
@@ -554,7 +578,7 @@ assert.equal(
 )
 assert.equal(
   normalisedMetadata.video_url,
-  'http://localhost:8000/videos/example.mp4',
+  'http://localhost:8000/Data/video/example.mp4',
   'Video URLs should resolve to the API host',
 )
 assert.equal(
