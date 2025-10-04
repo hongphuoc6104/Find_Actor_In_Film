@@ -42,6 +42,10 @@ python cli/search_cli.py --image path/to/image.jpg \
 
 All optional flags default to values in `configs/config.yaml` when not provided.
 
+Pass `--json` to print the raw decision payload, which is useful when the CLI is
+consumed from scripts or other tooling.
+
+
 ## Viewing search results
 
 Use the viewer CLI to visualize candidate frames returned from the recognition

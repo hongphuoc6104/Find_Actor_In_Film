@@ -1,6 +1,7 @@
 import argparse
 import os
 from typing import Any, Dict, List
+import json
 
 try:
     import cv2  # type: ignore
@@ -158,6 +159,11 @@ def main() -> None:
         default=search_cfg.get("min_count", 0),
         help="Minimum occurrence count for characters",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the raw decision payload as JSON",
+    )
 
     args = parser.parse_args()
     res = run(
@@ -171,6 +177,9 @@ def main() -> None:
 
     if "error" in res:
         print(f"Error: {res['error']}")
+        return
+    if args.json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
         return
 
     decisions = res.get("per_movie", {})
