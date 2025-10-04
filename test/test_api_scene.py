@@ -2,10 +2,47 @@ import importlib
 import io
 import json
 import os
+import shutil
 import sys
 import types
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 from starlette.routing import Mount
+
+
+def _data_video_root_for_tmp(tmp_path: Path) -> Path:
+    project_root = Path(__file__).resolve().parent.parent
+    return project_root / "Data" / "video" / tmp_path.name
+
+
+def _cleanup_data_video_root(video_root: Path) -> None:
+    shutil.rmtree(video_root, ignore_errors=True)
+    parent = video_root.parent
+    for expected in ("video", "Data"):
+        if parent.name != expected:
+            break
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
+
+
+@pytest.fixture
+def scene_payload_with_data_video_prefix():
+    def _extract(response):
+        assert response.status_code == 200
+        payload = response.json()
+        scene = payload.get("scene", {})
+        for field in ("video_url", "video_source"):
+            value = scene.get(field)
+            if value:
+                assert value.startswith("Data/video/")
+        return payload
+
+    return _extract
 
 def _stub_insightface(monkeypatch):
     app_module = types.ModuleType("insightface.app")
@@ -37,13 +74,15 @@ def _stub_insightface(monkeypatch):
 
 
 
-def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
+def test_scene_endpoint_serves_frame(
+    tmp_path, monkeypatch, scene_payload_with_data_video_prefix
+):
     frames_root = tmp_path / "frames"
     previews_root = tmp_path / "previews"
     characters_path = tmp_path / "characters.json"
     clips_root = tmp_path / "clips"
 
-    videos_root = tmp_path / "videos"
+    videos_root = _data_video_root_for_tmp(tmp_path)
     movie_key = "movie1"
     character_key = "char1"
     movie_folder = "MOVIE_FOLDER"
@@ -144,8 +183,7 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
                     "cursor": 0,
                 },
             )
-            assert response.status_code == 200
-            payload = response.json()
+            payload = scene_payload_with_data_video_prefix(response)
 
             scene = payload["scene"]
             assert scene["frame"].startswith(main.FRAMES_ROUTE)
@@ -176,13 +214,15 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             assert image_response.content
     finally:
         main._clear_character_cache()
+        _cleanup_data_video_root(videos_root)
 
-
-def test_scene_endpoint_normalises_windows_video_source(tmp_path, monkeypatch):
+def test_scene_endpoint_normalises_windows_video_source(
+    tmp_path, monkeypatch, scene_payload_with_data_video_prefix
+):
     frames_root = tmp_path / "frames"
     previews_root = tmp_path / "previews"
     characters_path = tmp_path / "characters.json"
-    videos_root = tmp_path / "videos"
+    videos_root = _data_video_root_for_tmp(tmp_path)
 
     movie_key = "movie1"
     character_key = "char1"
