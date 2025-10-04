@@ -1223,5 +1223,7 @@ async def recognize_endpoint(image: UploadFile = File(...)) -> Dict[str, Any]:
         if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.warning(
+                    "Failed to delete temporary file %s: %s", temp_path, exc
+                )
