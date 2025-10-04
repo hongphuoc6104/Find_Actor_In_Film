@@ -31,7 +31,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRAMES_ROUTE = "/frames"
 PREVIEWS_ROUTE = "/previews"
 CLIPS_ROUTE = "/clips"
-VIDEOS_ROUTE = "/videos"
+VIDEO_URL_PREFIX: str | None = None
+VIDEO_MOUNT_ROUTE: str | None = None
 logger = logging.getLogger(__name__)
 
 _HIGHLIGHT_SETTINGS = get_highlight_settings()
@@ -263,14 +264,29 @@ if SCENE_CLIPS_ROOT:
 
 if VIDEO_ROOT:
     VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
+    try:
+        _derived_video_prefix = VIDEO_ROOT.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        _derived_video_prefix = None
+
+    if _derived_video_prefix:
+        VIDEO_URL_PREFIX = _derived_video_prefix
+    else:
+        VIDEO_URL_PREFIX = "videos"
+
+    VIDEO_MOUNT_ROUTE = f"/{VIDEO_URL_PREFIX.lstrip('/')}"
     app.mount(
-        VIDEOS_ROUTE,
+        VIDEO_MOUNT_ROUTE,
         StaticFiles(directory=str(VIDEO_ROOT)),
         name="videos",
     )
+else:
+    VIDEO_URL_PREFIX = None
+    VIDEO_MOUNT_ROUTE = None
 
-
-def _build_static_url(path: str, root: Path | None, route: str) -> str:
+def _build_static_url(
+    path: str, root: Path | None, route: str | None, *, prefix: str | None = None
+) -> str:
     """Convert a filesystem path within ``root`` to a served URL."""
 
     if root is None:
@@ -285,7 +301,11 @@ def _build_static_url(path: str, root: Path | None, route: str) -> str:
     except ValueError:
         return path
 
-    return f"{route.rstrip('/')}/{relative.as_posix()}"
+    relative_str = relative.as_posix()
+    base = prefix.rstrip("/") if prefix else (route or "").rstrip("/")
+    if not base:
+        return relative_str
+    return f"{base}/{relative_str}"
 
 
 def _build_frame_url(
@@ -387,7 +407,9 @@ def _build_clip_url(path: str) -> str:
 def _build_video_url(path: str) -> str:
     """Convert a source video path into an API URL."""
 
-    return _build_static_url(path, VIDEO_ROOT, VIDEOS_ROUTE)
+    route = VIDEO_MOUNT_ROUTE or "/videos"
+    prefix = VIDEO_URL_PREFIX if VIDEO_URL_PREFIX else None
+    return _build_static_url(path, VIDEO_ROOT, route, prefix=prefix)
 
 
 
@@ -498,7 +520,7 @@ def _convert_scene_entry(
         video_url = _build_video_url(served_name)
         converted["video_source"] = video_url
         converted["video_url"] = video_url
-        converted.setdefault("video", video_url)
+        converted["video"] = video_url
     else:
         video_url = converted.get("video_url")
 

@@ -128,7 +128,7 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             (
                 route
                 for route in main.app.routes
-                if isinstance(route, Mount) and route.path == main.VIDEOS_ROUTE
+                if isinstance(route, Mount) and route.path == main.VIDEO_MOUNT_ROUTE
             ),
             None,
         )
@@ -151,7 +151,7 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             assert scene["frame"].startswith(main.FRAMES_ROUTE)
             assert scene.get("frame_url", "").startswith(main.FRAMES_ROUTE)
             assert scene.get("frame_name") == frame_name
-            expected_video_url = f"{main.VIDEOS_ROUTE}/{video_rel_posix}"
+            expected_video_url = f"{main.VIDEO_URL_PREFIX}/{video_rel_posix}"
             assert scene.get("video_url") == expected_video_url
             assert scene.get("video_source") == expected_video_url
             assert scene.get("start_time") == 12.5
@@ -168,7 +168,7 @@ def test_scene_endpoint_serves_frame(tmp_path, monkeypatch):
             assert timeline[0]["frame"].startswith(main.FRAMES_ROUTE)
             assert timeline[1]["timestamp"] == 13.0
 
-            video_response = client.get(scene["video_url"])
+            video_response = client.get(f"/{scene['video_url']}")
             assert video_response.status_code == 200
 
             image_response = client.get(scene["frame"])
@@ -245,15 +245,17 @@ def test_scene_endpoint_normalises_windows_video_source(tmp_path, monkeypatch):
             payload = response.json()
 
             scene = payload["scene"]
-            expected_video_url = f"{main.VIDEOS_ROUTE}/nested/folder/{video_basename}"
+            expected_video_url = (
+                f"{main.VIDEO_URL_PREFIX}/nested/folder/{video_basename}"
+            )
             assert scene.get("video_url") == expected_video_url
             assert scene.get("video_source") == expected_video_url
 
-            good_response = client.get(scene["video_url"])
+            good_response = client.get(f"/{scene['video_url']}")
             assert good_response.status_code == 200
 
             nested_path = windows_video_path.replace("\\", "/")
-            nested_response = client.get(f"{main.VIDEOS_ROUTE}/{nested_path}")
+            nested_response = client.get(f"{main.VIDEO_MOUNT_ROUTE}/{nested_path}")
             assert nested_response.status_code == 200
     finally:
         main._clear_character_cache()
@@ -659,7 +661,7 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
             assert scene["frame"].startswith(main.FRAMES_ROUTE)
             assert scene["frame_url"] == scene["frame"]
             assert scene["frame_name"] == frame_name
-            assert scene["video_url"].startswith(main.VIDEOS_ROUTE)
+            assert scene["video_url"].startswith(main.VIDEO_URL_PREFIX)
             assert scene["start_time"] == 1.5
             assert scene["timeline"][0]["bbox"] == [0, 0, 50, 60]
             assert scene["highlights"] == []
@@ -668,10 +670,9 @@ def test_recognize_endpoint_includes_frame_urls(tmp_path, monkeypatch):
             scenes = character.get("scenes")
             assert scenes and scenes[0]["frame"].startswith(main.FRAMES_ROUTE)
             assert scenes[0]["frame_name"] == frame_name
-            assert scenes[0]["video_url"].startswith(main.VIDEOS_ROUTE)
+            assert scenes[0]["video_url"].startswith(main.VIDEO_URL_PREFIX)
             assert scenes[0]["highlights"] == []
             assert scenes[0]["highlight_total"] == 0
-
             preview_entry = character["previews"][0]
             assert preview_entry["frame"].startswith(main.FRAMES_ROUTE)
             assert preview_entry["frame_url"] == preview_entry["frame"]
