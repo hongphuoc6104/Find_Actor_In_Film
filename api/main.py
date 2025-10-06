@@ -93,8 +93,10 @@ def _resolve_video_root() -> Path | None:
 
     video_root = Path(raw_root)
     if not video_root.is_absolute():
-        video_root = PROJECT_ROOT / video_root
-
+        try:
+            video_root = Path.cwd() / video_root
+        except (OSError, RuntimeError):
+            video_root = PROJECT_ROOT / video_root
     return video_root
 
 

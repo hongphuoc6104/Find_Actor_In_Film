@@ -72,6 +72,37 @@ def _stub_insightface(monkeypatch):
     monkeypatch.setitem(sys.modules, "pandas", pandas_module)
 
 
+def test_video_root_prefers_cwd_for_relative_paths(tmp_path, monkeypatch):
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+
+    relative_root = Path("relative") / "videos"
+    expected_root = working_dir / relative_root
+    expected_root.mkdir(parents=True)
+
+    fake_cwd = {"path": Path.cwd()}
+
+    def fake_chdir(path):
+        fake_cwd["path"] = Path(path)
+
+    monkeypatch.setattr(os, "chdir", fake_chdir)
+    monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: fake_cwd["path"]))
+
+    os.chdir(working_dir)
+
+    config = {"storage": {"video_root": str(relative_root)}}
+    monkeypatch.setattr("utils.config_loader.load_config", lambda: config)
+
+    _stub_insightface(monkeypatch)
+    sys.modules.pop("api.main", None)
+    main = importlib.import_module("api.main")
+
+    try:
+        assert main.VIDEO_ROOT == expected_root
+    finally:
+        sys.modules.pop("api.main", None)
+
+
 
 
 def test_scene_endpoint_serves_frame(
