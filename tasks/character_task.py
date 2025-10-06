@@ -222,6 +222,11 @@ def _finalise_highlight(
     if start_bound is None:
         start_bound = 0.0
     end_bound = _parse_time(timeline_end)
+    if end_bound is not None and end_bound <= start_bound:
+        # If the effective timeline has no span we should allow the
+        # highlight to extend freely so that minimum duration constraints can
+        # still be satisfied.
+        end_bound = None
 
     extend_seconds = float(HIGHLIGHT_EXTEND_SECONDS) if HIGHLIGHT_EXTEND_SECONDS else 0.0
     if extend_seconds > 0:
@@ -1509,6 +1514,7 @@ def character_task():
 
             scenes: List[Dict[str, Any]] = []
             rep_row: pd.Series | None = None
+            rep_image: Dict[str, Any] = {}
             scene_frame_count = 0
 
             allowed_clusters: set[str] = set()
@@ -1526,10 +1532,12 @@ def character_task():
                 if os.path.isdir(potential_dir):
                     movie_frames_dir = potential_dir
 
+            scene_df: pd.DataFrame | None = None
             if not movie_embeddings.empty and track_ids:
                 scene_rows = movie_embeddings["track_id"].isin(track_ids)
-                scene_df = movie_embeddings[scene_rows].copy()
-                if not scene_df.empty:
+                candidate_df = movie_embeddings[scene_rows].copy()
+                if not candidate_df.empty:
+                    scene_df = candidate_df
                     if "frame_index" not in scene_df.columns:
                         scene_df["frame_index"] = scene_df["frame"].apply(_frame_to_int)
                     scene_df.sort_values(["track_id", "frame_index"], inplace=True)
@@ -1844,20 +1852,18 @@ def character_task():
                     )
                     rep_row = scene_df.loc[rep_idx]
 
-                if rep_row is None and not tracks.empty:
-                    rep_idx = tracks["det_score"].idxmax() if "det_score" in tracks else tracks.index[0]
-                    rep_row = tracks.loc[rep_idx]
+            if rep_row is None and not tracks.empty:
+                rep_idx = tracks["det_score"].idxmax() if "det_score" in tracks else tracks.index[0]
+                rep_row = tracks.loc[rep_idx]
 
-                rep_image = {}
-                if rep_row is not None:
-                    rep_bbox = (
-                        rep_row["bbox"] if "bbox" in rep_row else []
-                    )
-                    rep_image = {
-                        "movie": rep_row.get("movie", movie_name),
-                        "frame": rep_row.get("frame"),
-
-                        "bbox": _normalize_bbox(rep_bbox) if rep_bbox is not None else [],
+            if rep_row is not None:
+                rep_bbox = (
+                    rep_row["bbox"] if "bbox" in rep_row else []
+                )
+                rep_image = {
+                    "movie": rep_row.get("movie", movie_name),
+                    "frame": rep_row.get("frame"),
+                    "bbox": _normalize_bbox(rep_bbox) if rep_bbox is not None else [],
                     "det_score": float(rep_row.get("det_score", 0.0)),
                 }
 
