@@ -283,6 +283,73 @@ def test_scene_endpoint_serves_frame(
         main._clear_character_cache()
         _cleanup_data_video_root(videos_root)
 
+def test_scene_endpoint_returns_404_when_video_missing(tmp_path, monkeypatch):
+    frames_root = tmp_path / "frames"
+    previews_root = tmp_path / "previews"
+    characters_path = tmp_path / "characters.json"
+
+    videos_root = _data_video_root_for_tmp(tmp_path)
+    videos_root.mkdir(parents=True, exist_ok=True)
+
+    movie_key = "movie1"
+    character_key = "char1"
+    movie_folder = "MOVIE_FOLDER"
+    frame_name = "frame_0001.jpg"
+    video_rel = os.path.join(movie_folder, "movie.mp4")
+
+    (frames_root / movie_folder).mkdir(parents=True, exist_ok=True)
+    (frames_root / movie_folder / frame_name).write_bytes(b"frame-bytes")
+
+    characters = {
+        movie_key: {
+            character_key: {
+                "movie": movie_folder,
+                "scenes": [
+                    {
+                        "frame": frame_name,
+                        "video_source": video_rel.replace(os.sep, "/"),
+                        "timestamp": 1.0,
+                        "highlights": [],
+                    }
+                ],
+            }
+        }
+    }
+
+    characters_path.write_text(json.dumps(characters), encoding="utf-8")
+
+    config = {
+        "storage": {
+            "frames_root": str(frames_root),
+            "cluster_previews_root": str(previews_root),
+            "video_root": str(videos_root),
+            "characters_json": str(characters_path),
+        }
+    }
+
+    monkeypatch.setattr("utils.config_loader.load_config", lambda: config)
+
+    _stub_insightface(monkeypatch)
+    sys.modules.pop("api.main", None)
+    main = importlib.import_module("api.main")
+
+    try:
+        with TestClient(main.app) as client:
+            response = client.post(
+                "/scene",
+                json={
+                    "movie_id": movie_key,
+                    "character_id": character_key,
+                    "cursor": 0,
+                },
+            )
+            assert response.status_code == 404
+            payload = response.json()
+            assert payload.get("detail") == main.VIDEO_SOURCE_NOT_FOUND_MESSAGE
+    finally:
+        main._clear_character_cache()
+        _cleanup_data_video_root(videos_root)
+
 def test_scene_endpoint_normalises_windows_video_source(
     tmp_path, monkeypatch, scene_payload_with_data_video_prefix
 ):

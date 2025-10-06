@@ -33,6 +33,7 @@ PREVIEWS_ROUTE = "/previews"
 CLIPS_ROUTE = "/clips"
 VIDEO_URL_PREFIX: str | None = None
 VIDEO_MOUNT_ROUTE: str | None = None
+VIDEO_SOURCE_NOT_FOUND_MESSAGE = "Video source not available for requested scene"
 logger = logging.getLogger(__name__)
 
 _HIGHLIGHT_SETTINGS = get_highlight_settings()
@@ -427,6 +428,7 @@ def _convert_scene_entry(
     *,
     movie: str | None = None,
     movie_id: str | int | None = None,
+    verify_video_source: bool = False,
 ) -> Any:
     """Normalise and convert scene metadata for API responses."""
 
@@ -481,12 +483,43 @@ def _convert_scene_entry(
             break
 
     if isinstance(video_source, str) and video_source:
-        # video_source = os.path.basename(video_source)
-        # converted["video_source"] = video_source
-        # video_url = _build_video_url(video_source)
         raw_video_source = video_source
         normalized_source = raw_video_source.replace("\\", "/").strip()
         safe_relative: str | None = None
+
+        def _raise_missing_video_source(reason: str | None = None) -> None:
+            if not verify_video_source:
+                return
+            context_parts = [
+                f"movie={effective_movie!r}",
+                f"movie_id={effective_movie_id!r}",
+            ]
+            scene_identifier = converted.get("scene_id")
+            if scene_identifier is not None:
+                context_parts.append(f"scene_id={scene_identifier!r}")
+            scene_index = converted.get("scene_index")
+            if scene_index is not None:
+                context_parts.append(f"scene_index={scene_index!r}")
+            track_identifier = converted.get("track_id") or converted.get("track")
+            if track_identifier is not None:
+                context_parts.append(f"track={track_identifier!r}")
+            context_parts.append(f"requested_source={raw_video_source!r}")
+            try:
+                resolved_name = served_name
+            except (UnboundLocalError, NameError):  # pragma: no cover - defensive guard
+                resolved_name = None
+            if resolved_name:
+                context_parts.append(f"resolved_name={resolved_name!r}")
+            if reason:
+                context_parts.append(reason)
+            logger.warning(
+                "Video source not available for scene (%s)",
+                ", ".join(context_parts),
+            )
+            raise HTTPException(
+                status_code=404, detail=VIDEO_SOURCE_NOT_FOUND_MESSAGE
+            )
+
 
         if normalized_source:
             if VIDEO_ROOT is not None:
@@ -520,12 +553,53 @@ def _convert_scene_entry(
         served_name = safe_relative or os.path.basename(normalized_source)
         if not served_name:
             served_name = normalized_source
+        if verify_video_source and not served_name:
+            _raise_missing_video_source("empty resolved video path")
         if safe_relative is None and normalized_source and normalized_source != served_name:
             logger.debug(
                 "Falling back to basename for unsafe video source '%s' -> '%s'",
                 raw_video_source,
                 served_name,
             )
+
+        if verify_video_source and VIDEO_ROOT is not None and served_name:
+            try:
+                resolved_root = VIDEO_ROOT.resolve()
+            except (OSError, RuntimeError):
+                resolved_root = VIDEO_ROOT
+
+            candidate_part = Path(served_name)
+            if candidate_part.is_absolute():
+                candidate_path = candidate_part.resolve()
+            else:
+                candidate_path = (resolved_root / candidate_part).resolve()
+
+            try:
+                relative_candidate = candidate_path.relative_to(resolved_root)
+            except (ValueError, RuntimeError, OSError):
+                _raise_missing_video_source(
+                    f"resolved_path_outside_root={candidate_path}"
+                )
+            else:
+                served_name = relative_candidate.as_posix() or served_name
+
+            try:
+                is_file = candidate_path.is_file()
+            except OSError:
+                is_file = False
+            if not is_file:
+                _raise_missing_video_source(
+                    f"resolved_path_missing={candidate_path}"
+                )
+            try:
+                readable = os.access(str(candidate_path), os.R_OK)
+            except OSError:
+                readable = False
+            if not readable:
+                _raise_missing_video_source(
+                    f"resolved_path_unreadable={candidate_path}"
+                )
+
         video_url = _build_video_url(served_name)
         converted["video_source"] = video_url
         converted["video_url"] = video_url
@@ -1157,7 +1231,10 @@ async def scene_endpoint(request: SceneRequest) -> Dict[str, Any]:
         or character.get("movie_folder")
     )
     scene_payload = _convert_scene_entry(
-        scene_raw, movie=movie_label, movie_id=character.get("movie_id")
+        scene_raw,
+        movie=movie_label,
+        movie_id=character.get("movie_id"),
+        verify_video_source=True,
     )
     # next_cursor = cursor + 1 if cursor + 1 < len(scenes) else None
 
