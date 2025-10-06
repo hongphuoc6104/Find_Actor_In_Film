@@ -414,12 +414,36 @@ def _build_clip_url(path: str) -> str:
 
     return _build_static_url(path, SCENE_CLIPS_ROOT, CLIPS_ROUTE)
 
+
+def _normalise_video_served_name(path: str, prefix: str | None) -> str:
+    """Strip duplicate prefix segments from a served video path."""
+
+    if not path:
+        return path
+
+    normalised_path = PurePosixPath(str(path).replace("\\", "/"))
+    if prefix:
+        prefix_path = PurePosixPath(str(prefix).replace("\\", "/"))
+        prefix_parts = tuple(part for part in prefix_path.parts if part not in ("", "."))
+        path_parts = normalised_path.parts
+        if (
+            prefix_parts
+            and len(path_parts) > len(prefix_parts)
+            and tuple(path_parts[: len(prefix_parts)]) == prefix_parts
+        ):
+            normalised_path = PurePosixPath(*path_parts[len(prefix_parts) :])
+
+    return normalised_path.as_posix()
+
+
+
 def _build_video_url(path: str) -> str:
     """Convert a source video path into an API URL."""
 
     route = VIDEO_MOUNT_ROUTE or "/videos"
     prefix = VIDEO_URL_PREFIX if VIDEO_URL_PREFIX else None
-    return _build_static_url(path, VIDEO_ROOT, route, prefix=prefix)
+    served_name = _normalise_video_served_name(path, prefix)
+    return _build_static_url(served_name, VIDEO_ROOT, route, prefix=prefix)
 
 
 
@@ -609,7 +633,7 @@ def _convert_scene_entry(
                 _raise_missing_video_source(
                     f"resolved_path_outside_root={Path(served_name)}"
                 )
-
+            else:
                 served_name = relative_candidate or served_name
 
             try:

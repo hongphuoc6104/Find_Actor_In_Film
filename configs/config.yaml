@@ -14,6 +14,7 @@ storage:
   clusters_merged_parquet: "warehouse/parquet/clusters_merged.parquet"
   cluster_previews_root: "warehouse/cluster_previews"
   scene_clips_root: "warehouse/scene_clips"
+  cluster_tuning_report: "reports/cluster_tuning.csv"
 
   characters_json: "warehouse/characters.json"
   pca_model: "models/pca_model.joblib"
@@ -42,7 +43,15 @@ clustering:
     use_precomputed: true
     min_cluster_size: 5
     min_samples: 5
-
+  auto_optimize:
+    enable: false
+    distance_thresholds: [0.35, 0.4, 0.45, 0.5]
+    metrics: ["euclidean", "cosine"]
+    linkages: ["complete", "average"]
+    min_track_count: 8
+    min_clusters: 2
+    max_clusters: 120
+    cluster_weight: 0.0
 merge:
   global_threshold: 0.78       # cosine similarity threshold for global merge
 

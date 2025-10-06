@@ -1,4 +1,8 @@
 from __future__ import annotations
+import itertools
+import math
+import os
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 import numpy as np
@@ -30,6 +34,182 @@ def filter_clusters(
         print(f"[INFO] Filtered out {removed} tracks/clusters based on config.")
 
     return df.copy()
+
+
+def _score_candidate(
+    silhouette: Optional[float],
+    n_clusters: int,
+    *,
+    min_clusters: int,
+    max_clusters: Optional[int],
+    cluster_weight: float,
+) -> float:
+    """Compute a comparable score for auto-tuning candidates."""
+
+    if max_clusters is not None and n_clusters > max_clusters:
+        return float("-inf")
+
+    if n_clusters < min_clusters:
+        return float("-inf")
+
+    base = float("-inf")
+    if silhouette is not None and not math.isnan(silhouette):
+        base = float(silhouette)
+    else:
+        base = -1.0
+
+    return base + cluster_weight * float(n_clusters)
+
+
+def _auto_optimize_agglomerative(
+    emb_matrix: np.ndarray,
+    movie_key: Any,
+    *,
+    base_candidate: Dict[str, Any],
+    auto_cfg: Dict[str, Any],
+) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Search for the best agglomerative config based on silhouette score."""
+
+    thresholds: Iterable[float] = auto_cfg.get("distance_thresholds") or []
+    metrics: Iterable[str] = auto_cfg.get("metrics") or []
+    linkages: Iterable[str] = auto_cfg.get("linkages") or []
+
+    candidate_thresholds = set(float(t) for t in thresholds)
+    candidate_metrics = set(m.lower() for m in metrics)
+    candidate_linkages = set(l.lower() for l in linkages)
+
+    candidate_thresholds.add(float(base_candidate["distance_threshold"]))
+    candidate_metrics.add(base_candidate["metric"].lower())
+    candidate_linkages.add(base_candidate["linkage"].lower())
+
+    min_clusters = int(auto_cfg.get("min_clusters", 1))
+    max_clusters = auto_cfg.get("max_clusters")
+    if max_clusters is not None:
+        max_clusters = int(max_clusters)
+
+    cluster_weight = float(auto_cfg.get("cluster_weight", 0.0))
+
+    # Prepare base candidate list with the already computed agglomerative result.
+    candidates: List[Dict[str, Any]] = []
+    base_candidate = {
+        **base_candidate,
+        "score": _score_candidate(
+            base_candidate.get("silhouette"),
+            int(base_candidate.get("num_clusters", 0)),
+            min_clusters=min_clusters,
+            max_clusters=max_clusters,
+            cluster_weight=cluster_weight,
+        ),
+        "error": None,
+        "is_base": True,
+    }
+    candidates.append(base_candidate)
+
+    for metric, linkage, threshold in itertools.product(
+        sorted(candidate_metrics),
+        sorted(candidate_linkages),
+        sorted(candidate_thresholds),
+    ):
+        if (
+            metric == base_candidate["metric"]
+            and linkage == base_candidate["linkage"]
+            and math.isclose(threshold, float(base_candidate["distance_threshold"]))
+        ):
+            continue
+
+        if linkage == "ward" and metric != "euclidean":
+            continue
+
+        try:
+            clusterer = AgglomerativeClustering(
+                n_clusters=None,
+                distance_threshold=float(threshold),
+                metric=metric,
+                linkage=linkage,
+            )
+            labels = clusterer.fit_predict(emb_matrix)
+            n_clusters = int(len(set(labels)))
+            sil = None
+            if n_clusters > 1:
+                try:
+                    sil = float(silhouette_score(emb_matrix, labels, metric=metric))
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        f"[WARN] Silhouette score failed for metric={metric}, linkage={linkage}: {exc}"
+                    )
+                    sil = None
+        except Exception as exc:  # noqa: BLE001
+            candidates.append(
+                {
+                    "movie_key": movie_key,
+                    "metric": metric,
+                    "linkage": linkage,
+                    "distance_threshold": float(threshold),
+                    "num_clusters": None,
+                    "silhouette": None,
+                    "score": float("nan"),
+                    "error": str(exc),
+                    "labels": None,
+                    "is_base": False,
+                }
+            )
+            continue
+
+        score = _score_candidate(
+            sil,
+            n_clusters,
+            min_clusters=min_clusters,
+            max_clusters=max_clusters,
+            cluster_weight=cluster_weight,
+        )
+
+        candidates.append(
+            {
+                "movie_key": movie_key,
+                "metric": metric,
+                "linkage": linkage,
+                "distance_threshold": float(threshold),
+                "num_clusters": n_clusters,
+                "silhouette": sil,
+                "score": score,
+                "error": None,
+                "labels": labels,
+                "is_base": False,
+            }
+        )
+
+    best_candidate: Optional[Dict[str, Any]] = None
+    best_score = float("-inf")
+    for cand in candidates:
+        score = cand.get("score")
+        labels = cand.get("labels")
+        if labels is None:
+            continue
+        if score is None or math.isnan(score):
+            continue
+        if score > best_score:
+            best_score = score
+            best_candidate = cand
+
+    report_rows: List[Dict[str, Any]] = []
+    for cand in candidates:
+        report_rows.append(
+            {
+                "movie_key": movie_key,
+                "metric": cand.get("metric"),
+                "linkage": cand.get("linkage"),
+                "distance_threshold": cand.get("distance_threshold"),
+                "num_clusters": cand.get("num_clusters"),
+                "silhouette": cand.get("silhouette"),
+                "score": cand.get("score"),
+                "error": cand.get("error"),
+                "is_base": cand.get("is_base", False),
+                "chosen": cand is best_candidate,
+            }
+        )
+
+    return best_candidate, report_rows
+
 
 
 @task(name="Cluster Faces Task")
@@ -74,12 +254,17 @@ def cluster_task():
 
     print(f"[INFO] Đã load {len(df_tracks)} track centroids để gom cụm.")
 
-    metric = clustering_cfg.get("metric", "cosine")
+    default_metric = clustering_cfg.get("metric", "cosine").lower()
+    default_linkage = clustering_cfg.get("linkage", "complete").lower()
+
+    tuning_report_rows: List[Dict[str, Any]] = []
 
     # Gom cụm theo từng phim
     results = []
     for movie_key, group in df_tracks.groupby(group_col):
         print(f"Processing {group_col}={movie_key}...")
+        metric = default_metric
+        linkage = default_linkage
         emb_matrix = np.array(group["track_centroid"].tolist(), dtype=np.float32)
 
         if len(group) > 1:
@@ -113,7 +298,7 @@ def cluster_task():
                 n_clusters=None,
                 distance_threshold=dist_th,
                 metric=metric,
-                linkage=clustering_cfg.get("linkage", "complete"),
+                linkage=linkage,
             )
             aggl_labels = aggl_clusterer.fit_predict(emb_matrix)
             n_aggl = len(set(aggl_labels))
@@ -129,6 +314,44 @@ def cluster_task():
             chosen_labels = aggl_labels
             final_algo = "agglomerative"
             final_clusters = n_aggl
+            auto_cfg = clustering_cfg.get("auto_optimize", {})
+            auto_enabled = bool(auto_cfg.get("enable", False))
+            min_track_count = int(auto_cfg.get("min_track_count", 2))
+            if auto_enabled and len(group) >= min_track_count:
+                best_candidate, report_rows = _auto_optimize_agglomerative(
+                    emb_matrix,
+                    movie_key,
+                    base_candidate={
+                        "movie_key": movie_key,
+                        "metric": metric,
+                        "linkage": linkage,
+                        "distance_threshold": dist_th,
+                        "num_clusters": n_aggl,
+                        "silhouette": float(sil_score),
+                        "labels": aggl_labels,
+                    },
+                    auto_cfg=auto_cfg,
+                )
+                tuning_report_rows.extend(report_rows)
+
+                if best_candidate is not None and not best_candidate.get("is_base", False):
+                    chosen_labels = best_candidate["labels"]
+                    final_clusters = int(best_candidate.get("num_clusters", final_clusters))
+                    metric = best_candidate.get("metric", metric)
+                    linkage = best_candidate.get("linkage", linkage)
+                    dist_th = float(best_candidate.get("distance_threshold", dist_th))
+                    best_sil = best_candidate.get("silhouette")
+                    final_algo = "agglomerative(auto)"
+                    sil_display = "nan" if best_sil is None else f"{best_sil:.3f}"
+                    print(
+                        "[INFO] Auto-optimized clustering "
+                        f"metric={metric}, linkage={linkage}, distance={dist_th:.4f} "
+                        f"(silhouette={sil_display})"
+                    )
+            elif auto_enabled:
+                print(
+                    f"[INFO] Auto optimize skipped for {movie_key}: insufficient tracks (n={len(group)})"
+                )
 
             if algo in {"auto", "hdbscan"}:
                 import hdbscan
@@ -191,6 +414,13 @@ def cluster_task():
         min_track_size=int(filter_cfg.get("min_track_size", 1)),
         min_cluster_size=int(filter_cfg.get("min_cluster_size", 1)),
     )
+
+    tuning_report_path = storage_cfg.get("cluster_tuning_report")
+    if tuning_report_rows and tuning_report_path:
+        os.makedirs(os.path.dirname(tuning_report_path), exist_ok=True)
+        pd.DataFrame(tuning_report_rows).to_csv(tuning_report_path, index=False)
+        print(f"[INFO] Saved tuning report to {tuning_report_path}")
+
 
     # Logic thống kê
     unique_labels, counts = np.unique(clusters_df["cluster_id"], return_counts=True)
