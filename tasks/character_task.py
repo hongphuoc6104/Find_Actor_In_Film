@@ -425,7 +425,7 @@ def _make_highlight_matcher(
         clusters.update(_coerce_str_set(entry.get("cluster_ids")))
         final_ids = _coerce_str_set(entry.get("final_character_id"))
         final_ids.update(_coerce_str_set(entry.get("final_character_ids")))
-
+        final_ids.update(_coerce_str_set(entry.get("scene_final_character_id")))
         has_final_match = bool(allowed_final_ids and final_ids & allowed_final_ids)
         has_cluster_match = bool(allowed_clusters and clusters & allowed_clusters)
 
@@ -598,6 +598,7 @@ def _build_highlights(
         clusters.update(_coerce_str_set(entry.get("cluster_ids")))
         final_ids = _coerce_str_set(entry.get("final_character_id"))
         final_ids.update(_coerce_str_set(entry.get("final_character_ids")))
+        final_ids.update(_coerce_str_set(entry.get("scene_final_character_id")))
 
         detection_summary = _summarise_detection(
             entry,

@@ -1,7 +1,7 @@
 seed: 42
 
 storage:
-  video_root: ""
+  video_root: "Data/video"
   frames_root: "Data/frames"
   metadata_json: "Data/metadata.json"
   embeddings_folder_per_movie: "Data/embeddings"

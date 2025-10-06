@@ -569,19 +569,48 @@ def _convert_scene_entry(
                 resolved_root = VIDEO_ROOT
 
             candidate_part = Path(served_name)
-            if candidate_part.is_absolute():
-                candidate_path = candidate_part.resolve()
-            else:
-                candidate_path = (resolved_root / candidate_part).resolve()
+            candidate_path = None
+            relative_candidate = None
 
-            try:
-                relative_candidate = candidate_path.relative_to(resolved_root)
-            except (ValueError, RuntimeError, OSError):
-                _raise_missing_video_source(
-                    f"resolved_path_outside_root={candidate_path}"
+            def _resolve_candidate(part: Path) -> tuple[Path, str] | None:
+                try:
+                    path = part.resolve() if part.is_absolute() else (resolved_root / part).resolve()
+                except (OSError, RuntimeError):
+                    return None
+                try:
+                    relative = path.relative_to(resolved_root).as_posix()
+                except (ValueError, RuntimeError, OSError):
+                    return None
+                return path, relative
+
+            attempted_parts: list[Path] = [candidate_part]
+            if not candidate_part.is_absolute() and len(candidate_part.parts) > 1:
+                attempted_parts.extend(
+                    Path(*candidate_part.parts[index:])
+                    for index in range(1, len(candidate_part.parts))
                 )
-            else:
-                served_name = relative_candidate.as_posix() or served_name
+
+            for part in attempted_parts:
+                resolved = _resolve_candidate(part)
+                if not resolved:
+                    continue
+                path, relative = resolved
+                candidate_path = path
+                relative_candidate = relative or served_name
+                candidate_part = part
+                try:
+                    is_file = path.is_file()
+                except OSError:
+                    is_file = False
+                if is_file:
+                    break
+
+            if candidate_path is None or relative_candidate is None:
+                _raise_missing_video_source(
+                    f"resolved_path_outside_root={Path(served_name)}"
+                )
+
+                served_name = relative_candidate or served_name
 
             try:
                 is_file = candidate_path.is_file()

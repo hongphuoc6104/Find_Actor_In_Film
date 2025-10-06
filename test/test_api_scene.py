@@ -283,6 +283,86 @@ def test_scene_endpoint_serves_frame(
         main._clear_character_cache()
         _cleanup_data_video_root(videos_root)
 
+
+def test_scene_endpoint_handles_redundant_data_video_prefix(
+    tmp_path, monkeypatch, scene_payload_with_data_video_prefix
+):
+    frames_root = tmp_path / "frames"
+    previews_root = tmp_path / "previews"
+    characters_path = tmp_path / "characters.json"
+
+    videos_root = _data_video_root_for_tmp(tmp_path)
+    movie_key = "movie1"
+    character_key = "char1"
+    movie_folder = "MOVIE_FOLDER"
+    frame_name = "frame_0001.jpg"
+
+    frame_file = frames_root / movie_folder / frame_name
+    frame_file.parent.mkdir(parents=True, exist_ok=True)
+    frame_file.write_bytes(b"frame")
+
+    video_rel = os.path.join(movie_folder, "movie.mp4")
+    video_rel_posix = video_rel.replace(os.sep, "/")
+    video_file = videos_root / video_rel
+    video_file.parent.mkdir(parents=True, exist_ok=True)
+    video_file.write_bytes(b"video-bytes")
+
+    redundant_prefix = os.path.join("Data", "video", tmp_path.name)
+    redundant_source = f"{redundant_prefix}/{video_rel_posix}"
+
+    characters = {
+        movie_key: {
+            character_key: {
+                "movie": movie_folder,
+                "scenes": [
+                    {
+                        "frame": frame_name,
+                        "timestamp": 10.0,
+                        "video_source": redundant_source,
+                        "highlights": [],
+                    }
+                ],
+            }
+        }
+    }
+
+    characters_path.write_text(json.dumps(characters), encoding="utf-8")
+
+    config = {
+        "storage": {
+            "frames_root": str(frames_root),
+            "cluster_previews_root": str(previews_root),
+            "video_root": str(videos_root),
+            "characters_json": str(characters_path),
+        }
+    }
+
+    monkeypatch.setattr("utils.config_loader.load_config", lambda: config)
+    _stub_insightface(monkeypatch)
+    sys.modules.pop("api.main", None)
+    main = importlib.import_module("api.main")
+
+    try:
+        with TestClient(main.app) as client:
+            response = client.post(
+                "/scene",
+                json={
+                    "movie_id": movie_key,
+                    "character_id": character_key,
+                    "cursor": 0,
+                },
+            )
+            payload = scene_payload_with_data_video_prefix(response)
+
+            scene = payload["scene"]
+            expected_video_url = f"{main.VIDEO_URL_PREFIX}/{video_rel_posix}"
+            assert scene.get("video_url") == expected_video_url
+            assert scene.get("video_source") == expected_video_url
+    finally:
+        main._clear_character_cache()
+        _cleanup_data_video_root(videos_root)
+
+
 def test_scene_endpoint_returns_404_when_video_missing(tmp_path, monkeypatch):
     frames_root = tmp_path / "frames"
     previews_root = tmp_path / "previews"

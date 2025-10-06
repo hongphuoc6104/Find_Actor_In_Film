@@ -43,6 +43,34 @@ def test_build_highlights_requires_matching_target():
 
     assert highlights == []
 
+def test_highlight_matcher_accepts_scene_final_id_when_cluster_differs():
+    similarity = DEFAULT_HIGHLIGHT_SIMILARITY + 0.2
+    entries = [
+        {
+            "timestamp": 2.0,
+            "det_score": DEFAULT_HIGHLIGHT_DET_SCORE + 0.05,
+            "cluster_id": "cluster-A",
+            "scene_final_character_id": "final-1",
+            "actor_similarity": similarity,
+        }
+    ]
+
+    matcher = _make_highlight_matcher("final-1", {"cluster-B"}, DEFAULT_HIGHLIGHT_SIMILARITY)
+    highlights = _build_highlights(
+        entries,
+        det_th=DEFAULT_HIGHLIGHT_DET_SCORE,
+        max_gap=DEFAULT_HIGHLIGHT_GAP_SECONDS,
+        match_fn=matcher,
+        sim_threshold=DEFAULT_HIGHLIGHT_SIMILARITY,
+    )
+
+    assert len(highlights) == 1
+    highlight = highlights[0]
+    assert highlight["matched_final_character_ids"] == ["final-1"]
+    assert highlight["matched_cluster_ids"] == ["cluster-A"]
+    assert highlight["score"] == pytest.approx(similarity, rel=1e-6)
+
+
 
 def test_highlight_expands_short_segment_to_min_duration():
     similarity = DEFAULT_HIGHLIGHT_SIMILARITY + 0.15
