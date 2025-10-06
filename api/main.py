@@ -729,8 +729,24 @@ def _convert_scene_entry(
                 "movie": movie,
             },
         )
-    except Exception:  # pragma: no cover - defensive logging
-        pass
+    except Exception as exc:  # pragma: no cover - defensive logging
+        scene_context = {
+            "movie": movie or converted.get("movie"),
+            "scene": converted.get("scene_index"),
+            "track": converted.get("track_id")
+            or converted.get("track")
+            or converted.get("highlight_index"),
+        }
+        logger.warning(
+            "Failed to emit scene conversion debug log for context %s",
+            scene_context,
+            exc_info=exc,
+            extra={
+                "movie": scene_context.get("movie"),
+                "scene": scene_context.get("scene"),
+                "track": scene_context.get("track"),
+            },
+        )
     support_meta = converted.get("highlight_support")
     if isinstance(support_meta, dict):
         support_copy: Dict[str, Any] = {}
@@ -831,8 +847,24 @@ def _build_scene_entries(character: Dict[str, Any]) -> List[Dict[str, Any]]:
                         "movie": character.get("movie"),
                     },
                 )
-            except Exception:  # pragma: no cover - defensive logging
-                pass
+            except Exception as exc:  # pragma: no cover - defensive logging
+                scene_context = {
+                    "movie": character.get("movie"),
+                    "scene": source_scene_index,
+                    "track": scene_copy.get("track_id")
+                    or scene_copy.get("track")
+                    or scene_copy.get("highlight_index"),
+                }
+                logger.warning(
+                    "Failed to emit scene preparation debug log for context %s",
+                    scene_context,
+                    exc_info=exc,
+                    extra={
+                        "movie": scene_context.get("movie"),
+                        "scene": scene_context.get("scene"),
+                        "track": scene_context.get("track"),
+                    },
+                )
 
             if highlight_total:
                 for highlight_index in range(highlight_total):

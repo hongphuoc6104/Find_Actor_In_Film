@@ -6,10 +6,46 @@ import shutil
 import sys
 import types
 from pathlib import Path
-
+import logging
 import pytest
 from fastapi.testclient import TestClient
 from starlette.routing import Mount
+
+def test_convert_scene_entry_logs_context_when_debug_fails(monkeypatch, caplog):
+    _stub_insightface(monkeypatch)
+    sys.modules.pop("api.main", None)
+    api_main = importlib.import_module("api.main")
+
+    def _raise_debug(*args, **kwargs):
+        raise RuntimeError("debug failure")
+
+    monkeypatch.setattr(api_main, "normalise_highlights", lambda *args, **kwargs: [])
+    monkeypatch.setattr(api_main.logger, "debug", _raise_debug)
+
+    scene_payload = {
+        "scene_index": 7,
+        "track_id": "track-42",
+        "highlights": [],
+    }
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=api_main.logger.name):
+            api_main._convert_scene_entry(
+                scene_payload, movie="movie-7", movie_id="char-1"
+            )
+    finally:
+        sys.modules.pop("api.main", None)
+
+    warning_records = [
+        record for record in caplog.records if record.levelno == logging.WARNING
+    ]
+    assert warning_records, "expected a warning log when debug logging fails"
+    message = warning_records[0].message
+    assert "movie-7" in message
+    assert "'scene': 7" in message
+    assert "'track': 'track-42'" in message
+
+
 
 
 def _data_video_root_for_tmp(tmp_path: Path) -> Path:

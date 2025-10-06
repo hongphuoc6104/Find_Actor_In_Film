@@ -327,7 +327,30 @@ def normalise_highlights(
                     ],
                 },
             )
-        except Exception:  # pragma: no cover - logging safety
-            pass
+        except Exception as exc:  # pragma: no cover - logging safety
+            context = {
+                "movie": None,
+                "scene": None,
+                "track": None,
+            }
+            if isinstance(scene_identifier, dict):
+                context["movie"] = scene_identifier.get("movie")
+                context["scene"] = scene_identifier.get("scene")
+                context["track"] = scene_identifier.get("track") or scene_identifier.get(
+                    "track_id"
+                )
+            else:
+                context["scene"] = scene_identifier
 
+            fallback_logger = effective_logger if hasattr(effective_logger, "warning") else LOGGER
+            fallback_logger.warning(
+                "Failed to emit highlight normalisation debug log for context %s",
+                context,
+                exc_info=exc,
+                extra={
+                    "movie": context.get("movie"),
+                    "scene": context.get("scene"),
+                    "track": context.get("track"),
+                },
+            )
     return merged_segments

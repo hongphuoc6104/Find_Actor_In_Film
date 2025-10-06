@@ -1,3 +1,5 @@
+import logging
+
 from utils.highlights import normalise_highlights
 
 
@@ -60,3 +62,38 @@ def test_normalise_highlights_merges_and_sorts_segments():
     assert third["end"] == 46.0
     assert third["match_count"] == 3
     assert third["duration"] == 6.0
+
+
+
+def test_normalise_highlights_logs_context_when_debug_fails(monkeypatch, caplog):
+    from utils import highlights as hl
+
+    def _raise_debug(*args, **kwargs):
+        raise RuntimeError("debug failure")
+
+    monkeypatch.setattr(hl.LOGGER, "debug", _raise_debug)
+
+    raw_highlights = [
+        {"start": 1.0, "end": 2.0, "match_count": 1, "score": 0.9},
+    ]
+
+    with caplog.at_level(logging.WARNING, logger=hl.LOGGER.name):
+        segments = normalise_highlights(
+            raw_highlights,
+            logger=hl.LOGGER,
+            scene_identifier={
+                "movie": "movie-1",
+                "scene": 5,
+                "track": "track-1",
+            },
+        )
+
+    assert segments, "expected normalised segments even when debug logging fails"
+    warning_records = [
+        record for record in caplog.records if record.levelno == logging.WARNING
+    ]
+    assert warning_records, "expected a warning log when highlight debug logging fails"
+    message = warning_records[0].message
+    assert "movie-1" in message
+    assert "'scene': 5" in message
+    assert "'track': 'track-1'" in message
