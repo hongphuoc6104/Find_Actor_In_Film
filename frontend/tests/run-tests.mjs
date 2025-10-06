@@ -11,7 +11,44 @@ import { __test__ as configTest } from '../src/utils/config.js'
 const initialDom = new JSDOM('<!doctype html><html><body></body></html>')
 globalThis.window = initialDom.window
 globalThis.document = initialDom.window.document
-globalThis.navigator = initialDom.window.navigator
+
+const assignGlobalNavigator = () => {
+  const domNavigator = initialDom.window.navigator
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+
+  if (!descriptor) {
+    globalThis.navigator = domNavigator
+    return
+  }
+
+  if (descriptor.configurable) {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      enumerable: descriptor.enumerable ?? true,
+      value: domNavigator,
+      writable: true,
+    })
+    return
+  }
+
+  const existingNavigator = descriptor.get
+    ? descriptor.get.call(globalThis)
+    : globalThis.navigator
+
+  if (!existingNavigator || typeof existingNavigator !== 'object') {
+    return
+  }
+
+  for (const key of Reflect.ownKeys(domNavigator)) {
+    const propertyDescriptor = Object.getOwnPropertyDescriptor(domNavigator, key)
+    if (!propertyDescriptor) continue
+    try {
+      Object.defineProperty(existingNavigator, key, propertyDescriptor)
+    } catch {}
+  }
+}
+
+assignGlobalNavigator()
 globalThis.HTMLElement = initialDom.window.HTMLElement
 globalThis.SVGElement = initialDom.window.SVGElement
 globalThis.Element = initialDom.window.Element

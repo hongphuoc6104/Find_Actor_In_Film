@@ -1533,6 +1533,7 @@ def character_task():
                     movie_frames_dir = potential_dir
 
             scene_df: pd.DataFrame | None = None
+            grouped_tracks: List[Tuple[float, Any, pd.DataFrame]] = []
             if not movie_embeddings.empty and track_ids:
                 scene_rows = movie_embeddings["track_id"].isin(track_ids)
                 candidate_df = movie_embeddings[scene_rows].copy()
@@ -1542,47 +1543,60 @@ def character_task():
                         scene_df["frame_index"] = scene_df["frame"].apply(_frame_to_int)
                     scene_df.sort_values(["track_id", "frame_index"], inplace=True)
 
-                    grouped_tracks: List[Tuple[float, Any, pd.DataFrame]] = []
-                    for track_key, track_df in scene_df.groupby("track_id"):
-                        track_df = track_df.sort_values("frame_index")
-                        first_idx = None
-                        if "frame_index" in track_df.columns:
-                            first_val = track_df["frame_index"].dropna().min()
-                            if first_val == first_val:
-                                try:
-                                    first_idx = float(first_val)
-                                except (TypeError, ValueError):
-                                    first_idx = None
-                        order_value = first_idx if first_idx is not None else float("inf")
-                        grouped_tracks.append((order_value, track_key, track_df))
+            if scene_df is not None and not scene_df.empty:
+                source_df = scene_df
+            else:
+                source_df = tracks.copy()
+                if "frame_index" not in source_df.columns and "frame" in source_df.columns:
+                    source_df["frame_index"] = source_df["frame"].apply(_frame_to_int)
+                if "track_id" in source_df.columns and "frame_index" in source_df.columns:
+                    source_df.sort_values(["track_id", "frame_index"], inplace=True)
+                elif "frame_index" in source_df.columns:
+                    source_df.sort_values(["frame_index"], inplace=True)
 
-                    grouped_tracks.sort(
-                        key=lambda item: (
-                            item[0],
-                            _safe_slug(item[1], "track"),
-                        )
+            if not source_df.empty:
+                group_key = "track_id" if "track_id" in source_df.columns else None
+                if group_key is None:
+                    source_df = source_df.copy()
+                    source_df["__track_id__"] = 0
+                    group_key = "__track_id__"
+
+                for track_key, track_df in source_df.groupby(group_key):
+                    track_df = track_df.sort_values("frame_index") if "frame_index" in track_df.columns else track_df
+                    first_idx = None
+                    if "frame_index" in track_df.columns:
+                        first_val = track_df["frame_index"].dropna().min()
+                        if first_val == first_val:
+                            try:
+                                first_idx = float(first_val)
+                            except (TypeError, ValueError):
+                                first_idx = None
+                    order_value = first_idx if first_idx is not None else float("inf")
+                    grouped_tracks.append((order_value, track_key, track_df))
+
+            grouped_tracks.sort(
+                key=lambda item: (
+                    item[0],
+                    _safe_slug(item[1], "track"),
+                )
+            )
+
+            cluster_lookup: Dict[Any, Any] = {}
+            final_lookup: Dict[Any, Any] = {}
+            if "track_id" in tracks.columns:
+                track_meta = tracks.dropna(subset=["track_id"]).drop_duplicates("track_id")
+                if "cluster_id" in track_meta.columns:
+                    cluster_lookup = track_meta.set_index("track_id")["cluster_id"].to_dict()
+                    cluster_lookup.update(
+                        {str(k): v for k, v in cluster_lookup.items() if k is not None}
                     )
-                    cluster_lookup: Dict[Any, Any] = {}
-                    final_lookup: Dict[Any, Any] = {}
-                    if "track_id" in tracks.columns:
-                        track_meta = tracks.dropna(subset=["track_id"]).drop_duplicates(
-                            "track_id"
-                        )
-                        if "cluster_id" in track_meta.columns:
-                            cluster_lookup = track_meta.set_index("track_id")[
-                                "cluster_id"
-                            ].to_dict()
-                            cluster_lookup.update(
-                                {str(k): v for k, v in cluster_lookup.items() if k is not None}
-                            )
-                        if "final_character_id" in track_meta.columns:
-                            final_lookup = track_meta.set_index("track_id")[
-                                "final_character_id"
-                            ].to_dict()
-                            final_lookup.update(
-                                {str(k): v for k, v in final_lookup.items() if k is not None}
-                            )
-                    for order_idx, (_, track_key, track_df) in enumerate(grouped_tracks):
+                if "final_character_id" in track_meta.columns:
+                    final_lookup = track_meta.set_index("track_id")["final_character_id"].to_dict()
+                    final_lookup.update(
+                        {str(k): v for k, v in final_lookup.items() if k is not None}
+                    )
+
+            for order_idx, (_, track_key, track_df) in enumerate(grouped_tracks):
                         track_df = track_df.copy()
                         lookup_key_variants = [track_key]
                         try:
@@ -1845,12 +1859,13 @@ def character_task():
                         )
                         scenes.append(scene_entry)
 
-                    rep_idx = (
-                        scene_df["det_score"].idxmax()
-                        if "det_score" in scene_df
-                        else scene_df.index[0]
-                    )
-                    rep_row = scene_df.loc[rep_idx]
+            if scene_df is not None and not scene_df.empty:
+                rep_idx = (
+                    scene_df["det_score"].idxmax()
+                    if "det_score" in scene_df
+                    else scene_df.index[0]
+                )
+                rep_row = scene_df.loc[rep_idx]
 
             if rep_row is None and not tracks.empty:
                 rep_idx = tracks["det_score"].idxmax() if "det_score" in tracks else tracks.index[0]
