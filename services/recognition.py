@@ -53,6 +53,69 @@ def _maybe_float(value: Any) -> float | None:
     return float(result)
 
 
+def _normalise_character_id(value: Any) -> str | None:
+    """Convert a character identifier to string form when possible."""
+
+    if value is None or value != value:  # guard against ``None`` and ``NaN``
+        return None
+    try:
+        return str(value)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _find_competing_candidate(
+    candidates: List[Dict[str, Any]], best_candidate: Dict[str, Any]
+) -> Dict[str, Any] | None:
+    """Return the strongest competitor for ``best_candidate`` in ``candidates``."""
+
+    best_id = _normalise_character_id(best_candidate.get("character_id"))
+
+    for candidate in candidates[1:]:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_id = _normalise_character_id(candidate.get("character_id"))
+        if best_id is not None and candidate_id == best_id:
+            continue
+        return candidate
+
+    return None
+
+
+def _has_confident_lead(
+    best_score: float,
+    competitor_score: float,
+    *,
+    is_similarity_index: bool,
+    margin_threshold: float,
+    ratio_threshold: float,
+) -> bool:
+    """Determine whether the best score clearly outperforms the competitor."""
+
+    margin_ok = True
+    ratio_ok = True
+
+    if margin_threshold > 0:
+        diff = (
+            best_score - competitor_score
+            if is_similarity_index
+            else competitor_score - best_score
+        )
+        margin_ok = diff >= margin_threshold
+
+    if ratio_threshold > 0:
+        if is_similarity_index:
+            if competitor_score <= 0:
+                ratio_ok = True
+            else:
+                ratio_ok = best_score / max(competitor_score, 1e-12) >= ratio_threshold
+        else:
+            ratio_ok = competitor_score / max(best_score, 1e-12) >= ratio_threshold
+
+    return margin_ok or ratio_ok
+
+
+
 def _normalize_scene(scene: Any, *, highlight_limit: int | None = None) -> Dict[str, Any] | None:
     """Return a defensive copy of the provided scene metadata."""
 
@@ -219,6 +282,8 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
     min_score_cfg = _as_float(
         search_cfg.get("min_score", near_match_threshold), near_match_threshold
     )
+    margin_threshold = _as_float(search_cfg.get("margin_threshold", 0.05), 0.05)
+    ratio_threshold = _as_float(search_cfg.get("ratio_threshold", 1.1), 1.1)
     if is_similarity_index:
         min_score = min_score_cfg
     else:
@@ -247,7 +312,32 @@ def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
         if not isinstance(candidates, list) or not candidates:
             continue
 
+        candidates = [c for c in candidates if isinstance(c, dict)]
+        if not candidates:
+            continue
+
+        default_score = float("-inf") if is_similarity_index else float("inf")
+        candidates.sort(
+            key=lambda item: _as_float(item.get("distance"), default_score),
+            reverse=is_similarity_index,
+        )
+
+
         seen_character_ids: set[str] | None = None
+        best_candidate = candidates[0]
+        competitor = _find_competing_candidate(candidates, best_candidate)
+        if competitor is not None:
+            best_candidate_score = _as_float(best_candidate.get("distance"), 0.0)
+            competitor_score = _as_float(competitor.get("distance"), 0.0)
+            if not _has_confident_lead(
+                best_candidate_score,
+                competitor_score,
+                is_similarity_index=is_similarity_index,
+                margin_threshold=margin_threshold,
+                ratio_threshold=ratio_threshold,
+            ):
+                continue
+
         for candidate in candidates:
             if not isinstance(candidate, dict):
                 continue

@@ -182,6 +182,27 @@ def test_recognize_uses_near_match_when_no_present(monkeypatch, configured_thres
         for char in movie["characters"]
     )
 
+def test_recognize_skips_movies_without_confident_lead(
+    monkeypatch, configured_thresholds
+):
+    configured_thresholds["search"]["margin_threshold"] = 0.05
+    configured_thresholds["search"]["ratio_threshold"] = 1.1
+
+    def fake_search(image_path: str, k: int, score_floor: float, max_results: int):
+        return {
+            "1": [
+                _build_candidate(0.62, movie="Movie A", character_id="A"),
+                _build_candidate(0.6, movie="Movie A", character_id="B"),
+            ]
+        }
+
+    monkeypatch.setattr(recognition, "search_actor", fake_search)
+
+    result = recognition.recognize("/tmp/image.jpg")
+
+    assert result == {"is_unknown": True, "movies": []}
+
+
 def test_recognize_merges_highlight_scenes(monkeypatch, configured_thresholds):
     monkeypatch.setattr(recognition, "_HIGHLIGHT_LIMIT", None)
 
