@@ -139,11 +139,12 @@ def extract_frames_with_adaptive_sampling(
     return video_name, video_metadata
 
 
-@task(name="Ingestion Task")
-def ingestion_task():
+# THAY ĐỔI 1: Đổi tên task cho rõ ràng hơn và thêm tham số 'movie' vào hàm
+@task(name="Ingestion Task: Extract Frames")
+def ingestion_task(movie: Optional[str] = None):
     """
     Nhiệm vụ ingest:
-    - Nếu biến môi trường FS_ACTIVE_MOVIE được set -> chỉ xử lý đúng 1 phim đó
+    - Nếu tham số 'movie' được truyền vào -> chỉ xử lý đúng 1 phim đó
     - Ngược lại: giữ hành vi cũ (quét toàn bộ thư mục video_root)
     - Với mỗi video: nếu chưa trích thì trích khung + metadata
     - Cập nhật metadata_json
@@ -153,7 +154,8 @@ def ingestion_task():
     frames_folder = cfg["storage"]["frames_root"]
     metadata_filepath = cfg["storage"]["metadata_json"]
 
-    active_movie = (os.getenv("FS_ACTIVE_MOVIE") or "").strip()
+    # THAY ĐỔI 2: Ưu tiên sử dụng tham số 'movie' được truyền vào
+    active_movie = movie or (os.getenv("FS_ACTIVE_MOVIE") or "").strip()
     if active_movie:
         print(f"[Ingestion] Chế độ đơn-phim: chỉ xử lý '{active_movie}'")
 

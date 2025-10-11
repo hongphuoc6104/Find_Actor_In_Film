@@ -1,189 +1,129 @@
 # =========================
-# Face Search – CONFIG YAML (đồng bộ BE hiện tại)
+# Face Search – CONFIG YAML
 # =========================
-
 seed: 42
 
+# -------------------------
+# CÁC ĐƯỜNG DẪN LƯU TRỮ
+# -------------------------
 storage:
-  # Gốc dữ liệu
-  video_root: "Data/video"              # khóa đang dùng
-  videos_root: "Data/video"             # alias
+  video_root: "Data/video"
   frames_root: "Data/frames"
   face_crops_root: "Data/face_crops"
-
-  # Metadata & kho
   metadata_json: "Data/metadata.json"
   embeddings_folder_per_movie: "Data/embeddings"
-
-  # Parquet thống nhất
   warehouse_embeddings: "warehouse/parquet/embeddings.parquet"
-  warehouse_embeddings_pca: "warehouse/parquet/embeddings_pca.parquet"   # để trống/không dùng nếu PCA tắt
   warehouse_clusters: "warehouse/parquet/clusters.parquet"
   clusters_merged_parquet: "warehouse/parquet/clusters_merged.parquet"
-  warehouse_noise: "warehouse/parquet/noise.parquet"
-
-  # Centroid 512D cho nhận diện
   centroids_parquet: "warehouse/parquet/centroids.parquet"
-
-  # Previews & output phụ trợ
   cluster_previews_root: "warehouse/cluster_previews"
-  scene_clips_root: "warehouse/scene_clips"
-  cluster_tuning_report: "reports/cluster_tuning.csv"
-
-  # Manifest nhân vật
   characters_json: "warehouse/characters.json"
 
+# -------------------------
+# CẤU HÌNH NHẬN DIỆN (EMBEDDING)
+# -------------------------
 embedding:
   model: "buffalo_l"
   l2_normalize: true
   providers: ["CUDAExecutionProvider", "CPUExecutionProvider"]
-  embedding_dim: 512
 
-# PCA giữ để tương thích, nhưng mặc định TẮT
 pca:
   enable: false
-  n_components: 256
-  whiten: false
+
+# =====================================================================
+# CÁC NÚT VẶN TINH CHỈNH QUAN TRỌNG NHẤT
+# =====================================================================
 
 # -------------------------
-# Clustering (giữ cấu trúc hiện tại)
+# BƯỚC 1: TẠO CỤM BAN ĐẦU (CLUSTERING)
 # -------------------------
 clustering:
   algo: "agglomerative"
   metric: "euclidean"
   linkage: "complete"
-  auto_distance_percentile: 95
   distance_threshold:
-    default: 0.43
-  distance_threshold_pca: 0.90
-  hdbscan:
-    use_precomputed: true
-    min_cluster_size: 5
-    min_samples: 5
-  auto_optimize:
-    enable: false
-    distance_thresholds: [0.35, 0.4, 0.45, 0.5]
-    metrics: ["euclidean", "cosine"]
-    linkages: ["complete", "average"]
-    min_track_count: 8
-    min_clusters: 2
-    max_clusters: 120
-    cluster_weight: 0.0
+    # MỤC ĐÍCH: Kiểm soát độ "chặt" của các cụm ban đầu. Đây là khoảng cách tối đa (Euclidean)
+    # giữa hai khuôn mặt để chúng được coi là thuộc cùng một cụm.
+    # - TĂNG: Các cụm ban đầu sẽ lớn hơn, gộp được nhiều ảnh hơn nhưng có nguy cơ gộp nhầm (ảnh kém "sạch"). Ví dụ: 1.4
+    # - GIẢM: Các cụm ban đầu sẽ nhỏ hơn, rất "sạch" nhưng dễ bị "xé nhỏ" (một người bị chia thành nhiều cụm). Ví dụ: 0.9
+    default: 1.15
 
-# Alias cho code tham chiếu cluster.*
-cluster:
-  distance_threshold_pca: 0.90
-
+# -------------------------
+# BƯỚC 2: GỘP ĐA GIAI ĐOẠN (MULTI-STAGE MERGE)
+# -------------------------
+# Giai đoạn 1: Tạo Hạt nhân (Cores)
 merge:
-  global_threshold: 0.78
-  within_movie_threshold: 0.72
+  # MỤC ĐÍCH: Ngưỡng gộp các cụm ban đầu để tạo "Hạt nhân". Đây là ngưỡng ĐỘ TƯƠNG ĐỒNG (similarity)
+  # tối thiểu giữa hai cụm để gộp chúng lại. Giá trị từ 0 đến 1.
+  # - TĂNG: Gộp chặt hơn, yêu cầu hai cụm phải rất giống nhau mới gộp. An toàn hơn nhưng có thể không gộp được các góc mặt khác nhau. Ví dụ: 0.75
+  # - GIẢM: Gộp lỏng hơn, "dễ dãi" hơn, có thể gộp được các góc mặt khác nhau nhưng có nguy cơ gộp nhầm hai người. Ví dụ: 0.55
+  within_movie_threshold: 0.55
 
+# Giai đoạn 2: Hấp thụ Vệ tinh (Satellites)
 post_merge:
   enable: true
-  metric: "euclidean"
-  linkage: "average"
-  distance_threshold: 0.55
+  metric: "cosine"
+  # MỤC ĐÍCH: Ngưỡng "hấp thụ" các cụm Vệ tinh. Đây là KHOẢNG CÁCH tối đa (Cosine)
+  # từ một cụm vệ tinh đến một cụm hạt nhân để nó được hấp thụ.
+  # - TĂNG: Hấp thụ lỏng hơn, "dễ dãi" hơn. Một cụm vệ tinh có thể ở khá xa mà vẫn được gộp vào. Giúp gộp các góc mặt rất khác nhau nhưng có nguy cơ gộp nhầm. Ví dụ: 0.8
+  # - GIẢM: Hấp thụ chặt hơn. Vệ tinh phải rất gần hạt nhân mới được gộp. An toàn hơn nhưng có thể bỏ sót các góc mặt khác nhau. Ví dụ: 0.6
+  distance_threshold: 0.70
+
+# -------------------------
+# BƯỚC 3: BỘ LỌC KẾT QUẢ
+# -------------------------
+# Lọc để chọn Hạt nhân
+filter_clusters:
+  # MỤC ĐÍCH: Yêu cầu tối thiểu về số lượng ảnh "CHẤT LƯỢNG CAO" mà một cụm phải có
+  # để được chọn làm "Hạt nhân".
+  # - TĂNG: Yêu cầu khắt khe hơn. Chỉ những nhân vật xuất hiện nhiều và rõ nét mới được chọn làm hạt nhân. Giúp loại bỏ diễn viên phụ. Ví dụ: 15
+  # - GIẢM: Yêu cầu lỏng hơn. Cho phép cả những diễn viên phụ (xuất hiện ít hơn) có cơ hội được chọn làm hạt nhân. Ví dụ: 7
+  min_size: 4
+
+# -------------------------
+# BƯỚC 0: BỘ LỌC ĐẦU VÀO (QUALITY FILTERS)
+# -------------------------
+quality_filters:
+  enable: true
+
+  # MỤC ĐÍCH: Điểm tin cậy tối thiểu mà mô hình AI phải có khi phát hiện một khuôn mặt.
+  # - TĂNG: Yêu cầu AI phải "chắc chắn" hơn khi nói "đây là một khuôn mặt". Giúp loại bỏ các vật thể trông hơi giống mặt người. Ví dụ: 0.6
+  # - GIẢM: Cho phép AI phát hiện cả những khuôn mặt kém rõ ràng hơn. Ví dụ: 0.4
+  min_det_score: 0.7
+
+  # MỤC ĐÍCH: Độ nét tối thiểu của ảnh khuôn mặt.
+  # - TĂNG: Chỉ lấy những ảnh sắc nét. Ví dụ: 80.0
+  # - GIẢM: Chấp nhận cả những ảnh hơi mờ. Ví dụ: 50.0
+  min_blur_clarity: 70.0
+
+  # Cấu hình lọc đa tầng
+  landmark_quality_filter:
+    enable: true
+    # MỤC ĐÍCH: "Điểm sàn" chất lượng TUYỆT ĐỐI. Bất kỳ khuôn mặt nào có điểm chất lượng dưới ngưỡng này
+    # sẽ bị vứt đi ngay lập tức. Dùng để loại bỏ "rác" (tai, gáy, ảnh che gần hết).
+    # - TĂNG: Lọc "rác" mạnh tay hơn, nhưng có thể loại bỏ nhầm các ảnh bị che một phần. Ví dụ: 0.4
+    # - GIẢM: "Dễ dãi" hơn với "rác", cho phép nhiều ảnh chất lượng thấp đi vào vòng trong. Ví dụ: 0.2
+    min_score_hard_cutoff: 0.8
+
+    # MỤC ĐÍCH: "Điểm sàn" để một ảnh được coi là "CHẤT LƯỢNG CAO". Chỉ những ảnh trên ngưỡng này
+    # mới được đếm vào `min_size` khi chọn "Hạt nhân".
+    # - TĂNG: Yêu cầu một ảnh phải rất đẹp (gần chính diện, rõ nét) mới được coi là bằng chứng vững chắc để xây dựng "Hạt nhân". Ví dụ: 0.7
+    # - GIẢM: Chấp nhận cả những ảnh hơi nghiêng, chất lượng khá cũng được tính là "chất lượng cao". Ví dụ: 0.5
+    min_score_for_core: 0.9
+
+# =====================================================================
+# CÁC CẤU HÌNH KHÁC (Ít khi cần chỉnh)
+# =====================================================================
+preview:
+  source: "frames"
+  max_images_per_cluster: 999
 
 filter:
   min_track_size: 5
   min_cluster_size: 3
-
-filter_clusters:
-  min_size: 6
-
-quality_filters:
-  enable: true
-  min_det_score: 0.4
-  min_face_ratio: 0.003
-  min_blur_clarity: 60.0
-  brightness:
-    enable: true
-    value_range: [30, 230]
-  contrast:
-    enable: true
-    min_value: 25.0
-
-centroid:
-  method: "trimmed_mean"
-  trim_ratio: 0.20
-
-# -------------------------
-# Preview (ảnh cụm)
-# -------------------------
-preview:
-  source: "frames"                      # nếu muốn lấy crops → "crops"
-  max_images_per_cluster: 24
-  min_face_size: 0
-
-# (Không dùng index/FAISS cũ nữa – đã loại bỏ index_path/index_map)
-
-logging:
-  mlflow_experiment: "face_discovery_mvp"
-
-search:
-  present_threshold: 0.5
-  near_match_threshold: 0.3
-  min_score: 0.25        # hạ một chút để dễ thấy kết quả
-  max_results: 120
-  threshold: 0.45
-  top_k: 50
-  max_scenes: 8
-
-highlight:
-  MIN_HL_DURATION_SEC: 4.0
-  MERGE_GAP_SEC: 6.0
-  TOP_K_HL_PER_SCENE: 3
-  MIN_SCORE: 0.75
-  SIM_THRESHOLD: 0.65
-
-recognition:
-  SIM_THRESHOLD: 0.25     # đồng bộ với search.min_score
-
-frontend:
-  SEEK_PAD_SEC: 0.0
-  PAUSE_TOLERANCE_SEC: 0.2
-  MIN_VIEWABLE_SEC: 0.35
-
 tracklet:
   max_age: 3
   iou_threshold: 0.28
-
-# -------------------------
-# PROFILES
-# -------------------------
 profiles:
-  co_trang_dong_duc:
-    merge:   { within_movie_threshold: 0.84 }
-    cluster: { distance_threshold_pca: 0.91 }
-    filter_clusters: { min_size: 9 }
-    tracklet: { max_age: 4, iou_threshold: 0.24 }
+  balanced: {}
 
-  hien_dai_tinh_cam:
-    merge:   { within_movie_threshold: 0.80 }
-    cluster: { distance_threshold_pca: 0.90 }
-    filter_clusters: { min_size: 7 }
-    tracklet: { max_age: 3, iou_threshold: 0.28 }
-
-  hanh_dong_rung_lac:
-    merge:   { within_movie_threshold: 0.86 }
-    cluster: { distance_threshold_pca: 0.93 }
-    filter_clusters: { min_size: 10 }
-    tracklet: { max_age: 5, iou_threshold: 0.20 }
-
-  xua_lang_que:
-    merge:   { within_movie_threshold: 0.82 }
-    cluster: { distance_threshold_pca: 0.90 }
-    filter_clusters: { min_size: 8 }
-    tracklet: { max_age: 3, iou_threshold: 0.26 }
-
-  kinh_di_toi:
-    merge:   { within_movie_threshold: 0.85 }
-    cluster: { distance_threshold_pca: 0.92 }
-    filter_clusters: { min_size: 9 }
-    tracklet: { max_age: 4, iou_threshold: 0.22 }
-
-  balanced:
-    merge:   { within_movie_threshold: 0.82 }
-    cluster: { distance_threshold_pca: 0.90 }
-    filter_clusters: { min_size: 8 }
-    tracklet: { max_age: 3, iou_threshold: 0.26 }
