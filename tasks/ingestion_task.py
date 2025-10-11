@@ -124,7 +124,7 @@ def extract_frames_with_adaptive_sampling(
 
             # Lưu frame
             frame_filename = os.path.join(
-                output_folder_for_movie, f"frame_{saved_frame_count:07d}.jpg"
+                output_folder_for_movie, f"frame_{frame_count:07d}.jpg"
             )
             cv.imwrite(frame_filename, frame, encode_params)
             saved_frame_count += 1

@@ -78,7 +78,7 @@ filter_clusters:
   # để được chọn làm "Hạt nhân".
   # - TĂNG: Yêu cầu khắt khe hơn. Chỉ những nhân vật xuất hiện nhiều và rõ nét mới được chọn làm hạt nhân. Giúp loại bỏ diễn viên phụ. Ví dụ: 15
   # - GIẢM: Yêu cầu lỏng hơn. Cho phép cả những diễn viên phụ (xuất hiện ít hơn) có cơ hội được chọn làm hạt nhân. Ví dụ: 7
-  min_size: 4
+  min_size: 3
 
 # -------------------------
 # BƯỚC 0: BỘ LỌC ĐẦU VÀO (QUALITY FILTERS)
@@ -89,12 +89,12 @@ quality_filters:
   # MỤC ĐÍCH: Điểm tin cậy tối thiểu mà mô hình AI phải có khi phát hiện một khuôn mặt.
   # - TĂNG: Yêu cầu AI phải "chắc chắn" hơn khi nói "đây là một khuôn mặt". Giúp loại bỏ các vật thể trông hơi giống mặt người. Ví dụ: 0.6
   # - GIẢM: Cho phép AI phát hiện cả những khuôn mặt kém rõ ràng hơn. Ví dụ: 0.4
-  min_det_score: 0.7
+  min_det_score: 0.8
 
   # MỤC ĐÍCH: Độ nét tối thiểu của ảnh khuôn mặt.
   # - TĂNG: Chỉ lấy những ảnh sắc nét. Ví dụ: 80.0
   # - GIẢM: Chấp nhận cả những ảnh hơi mờ. Ví dụ: 50.0
-  min_blur_clarity: 70.0
+  min_blur_clarity: 180.0
 
   # Cấu hình lọc đa tầng
   landmark_quality_filter:
@@ -109,7 +109,7 @@ quality_filters:
     # mới được đếm vào `min_size` khi chọn "Hạt nhân".
     # - TĂNG: Yêu cầu một ảnh phải rất đẹp (gần chính diện, rõ nét) mới được coi là bằng chứng vững chắc để xây dựng "Hạt nhân". Ví dụ: 0.7
     # - GIẢM: Chấp nhận cả những ảnh hơi nghiêng, chất lượng khá cũng được tính là "chất lượng cao". Ví dụ: 0.5
-    min_score_for_core: 0.9
+    min_score_for_core: 0.85
 
 # =====================================================================
 # CÁC CẤU HÌNH KHÁC (Ít khi cần chỉnh)
