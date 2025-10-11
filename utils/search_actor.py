@@ -1,256 +1,245 @@
-"""Utilities for searching characters using face embeddings."""
+# utils/search_actor.py
+"""
+Tìm diễn viên/nhân vật dựa trên ảnh truy vấn bằng cách:
+- Đọc warehouse/characters.json
+- Lấy ảnh đại diện (rep_image) của từng cụm làm prototype
+- Tính embedding bằng InsightFace
+- So cosine similarity với ảnh truy vấn
+- Trả về danh sách theo từng phim ở format BE đang dùng
+
+Không phụ thuộc vào parquet hay PCA.
+"""
 
 from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Union
-from urllib.parse import urlparse
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
 
 from utils.config_loader import load_config
-from utils.indexer import load_index
-from utils.vector_utils import l2_normalize
+
+# -------------------------------
+# Model loader (cache toàn cục)
+# -------------------------------
+_APP: Optional[FaceAnalysis] = None
 
 
-def _query_index(index: Any, emb: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
-    """Query a FAISS or Annoy index."""
-    if hasattr(index, "search"):
-        distances, indices = index.search(emb, k)
-        return distances[0], indices[0]
-    if hasattr(index, "get_nns_by_vector"):
-        indices, distances = index.get_nns_by_vector(
-            emb[0], k, include_distances=True
-        )
-        return np.array(distances), np.array(indices)
-    raise TypeError("Unsupported index type")
+def _get_app() -> FaceAnalysis:
+    global _APP
+    if _APP is None:
+        app = FaceAnalysis(name="buffalo_l")  # mặc định 512D
+        # auto GPU nếu có, fallback CPU
+        try:
+            app.prepare(ctx_id=0, det_size=(640, 640))
+        except Exception:
+            app.prepare(ctx_id=-1, det_size=(640, 640))
+        _APP = app
+    return _APP
 
 
-def search_actor(
-    image_path: str,
-    k: int | None = 5,
-    min_count: int = 0,
-    return_emb: bool = False,
-    *,
-    score_floor: float | None = None,
-    max_results: int | None = None,
-) -> Union[Dict[str, List[Dict[str, Any]]], Dict[str, Any]]:
-    """Find the closest characters in the index based on an image.
+# -------------------------------
+# Helpers
+# -------------------------------
+def _load_json(path: str) -> Any:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
-    ``score_floor`` and ``max_results`` allow callers to request a wider
-    neighbourhood from the vector index so that all matches above the desired
-    similarity threshold can be considered.
-    """
-    cfg = load_config()
-    emb_cfg = cfg["embedding"]
-    storage_cfg = cfg["storage"]
-    pca_cfg = cfg.get("pca", {})
-    index_cfg = cfg.get("index", {})
-    search_cfg = cfg.get("search", {})
 
-    index, id_map = load_index()
-    index_type = str(index_cfg.get("type", "")).lower()
-    metric_hint = str(index_cfg.get("metric", "")).lower()
-    if not index_type and metric_hint:
-        index_type = metric_hint
-    is_similarity_index = "ip" in index_type or "cos" in index_type
+def _l2_normalize(v: np.ndarray) -> np.ndarray:
+    if v is None:
+        return v
+    n = np.linalg.norm(v)
+    if not np.isfinite(n) or n <= 0:
+        return v
+    return (v / n).astype(np.float32)
 
-    default_floor = float(search_cfg.get("min_score", 0.0))
-    floor_threshold = default_floor if score_floor is None else float(score_floor)
 
-    default_max_results = int(
-        search_cfg.get("max_results", search_cfg.get("top_k", 0)) or 0
-    )
-    if k is not None:
-        default_max_results = max(default_max_results, int(k))
-    if max_results is None:
-        base_query_limit = default_max_results if default_max_results > 0 else 50
-    else:
-        base_query_limit = int(max_results)
-    base_query_limit = max(1, base_query_limit)
+def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
+    # a, b: (D,)
+    if a is None or b is None:
+        return -1.0
+    aa = _l2_normalize(a)
+    bb = _l2_normalize(b)
+    s = float(np.dot(aa, bb))
+    # clamp đề phòng nhiễu float
+    if s > 1.0:
+        s = 1.0
+    if s < -1.0:
+        s = -1.0
+    return s
 
-    app = FaceAnalysis(name=emb_cfg["model"], providers=emb_cfg["providers"])
-    app.prepare(ctx_id=0, det_size=(640, 640))
 
-    img = cv2.imread(image_path)
+def _read_image(path: str) -> Optional[np.ndarray]:
+    if not path or not os.path.exists(path):
+        return None
+    img = cv2.imread(path)
     if img is None:
-        return {}
+        return None
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+
+def _detect_best_face(app: FaceAnalysis, img: np.ndarray) -> Optional[np.ndarray]:
+    """
+    Trả về embedding tốt nhất trong ảnh (chọn khuôn mặt có score cao nhất).
+    """
     faces = app.get(img)
     if not faces:
+        return None
+    # chọn face có det_score cao nhất
+    best = max(faces, key=lambda f: float(getattr(f, "det_score", 0.0)))
+    # best.normed_embedding là 512D đã chuẩn hóa, nếu không có thì dùng embedding thường
+    if hasattr(best, "normed_embedding") and best.normed_embedding is not None:
+        return np.array(best.normed_embedding, dtype=np.float32)
+    emb = getattr(best, "embedding", None)
+    if emb is None:
+        return None
+    return _l2_normalize(np.array(emb, dtype=np.float32))
+
+
+# -------------------------------
+# Characters DB (từ characters.json)
+# -------------------------------
+@dataclass
+class CharacterProto:
+    movie: str
+    character_id: str
+    rep_image: str
+    preview_paths: List[str]
+
+
+@lru_cache(maxsize=1)
+def _load_characters_json() -> Tuple[List[CharacterProto], Dict[str, Dict[str, Any]]]:
+    """
+    Trả về:
+      - danh sách CharacterProto (movie, character_id, rep_image, preview_paths)
+      - raw dict để tra cứu scenes nếu cần
+    """
+    cfg = load_config()
+    storage = cfg.get("storage", {}) if isinstance(cfg, dict) else {}
+    path = storage.get("characters_json") or "warehouse/characters.json"
+
+    data = _load_json(path)
+    protos: List[CharacterProto] = []
+    if isinstance(data, dict):
+        for movie_title, chars in data.items():
+            if not isinstance(chars, dict):
+                continue
+            for cid, entry in chars.items():
+                rep = entry.get("rep_image") or ""
+                previews = entry.get("preview_paths") or []
+                protos.append(
+                    CharacterProto(
+                        movie=str(movie_title),
+                        character_id=str(cid),
+                        rep_image=str(rep),
+                        preview_paths=[str(p) for p in previews],
+                    )
+                )
+    return protos, (data if isinstance(data, dict) else {})
+
+
+# -------------------------------
+# Embedding cache cho prototypes
+# -------------------------------
+# cache theo (đường dẫn ảnh, mtime) để tránh phải tái tính nhiều lần
+_PROTO_EMB_CACHE: Dict[Tuple[str, float], np.ndarray] = {}
+
+
+def _embed_proto_image(app: FaceAnalysis, image_path: str) -> Optional[np.ndarray]:
+    try:
+        mtime = os.path.getmtime(image_path)
+    except Exception:
+        mtime = -1.0
+    key = (image_path, mtime)
+    if key in _PROTO_EMB_CACHE:
+        return _PROTO_EMB_CACHE[key]
+
+    img = _read_image(image_path)
+    if img is None:
+        return None
+    emb = _detect_best_face(app, img)
+    if emb is not None:
+        _PROTO_EMB_CACHE[key] = emb
+    return emb
+
+
+# -------------------------------
+# Public API
+# -------------------------------
+def search_actor(
+    image_path: str,
+    *,
+    max_results: int = 50,
+    score_floor: float = 0.30,
+    min_count: int = 1,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Nhận 1 ảnh truy vấn → trả về dict:
+    {
+      "<movie_title>": [
+         {
+           "character_id": "...",
+           "distance": <similarity 0..1>,
+           "rep_image": "...",
+           "preview_paths": [...],
+         },
+         ...
+      ],
+      ...
+    }
+    Chỉ giữ các kết quả có similarity >= score_floor.
+    """
+    app = _get_app()
+
+    # 1) embedding ảnh truy vấn
+    q_img = _read_image(image_path)
+    if q_img is None:
+        return {}
+    q_emb = _detect_best_face(app, q_img)
+    if q_emb is None:
         return {}
 
-    # lấy mặt có det_score cao nhất
-    faces.sort(key=lambda f: f.det_score, reverse=True)
-    emb = faces[0].embedding.astype("float32")
+    # 2) load prototypes từ characters.json
+    protos, raw_chars = _load_characters_json()
+    if not protos:
+        return {}
 
-    # normalize trước PCA (embedding gốc thường đã chuẩn)
-    if emb_cfg.get("l2_normalize", True):
-        emb = l2_normalize(emb)
-
-    # nếu index đang ở chiều khác, cố gắng áp PCA để khớp
-    index_dim = getattr(index, "d", emb.shape[0])  # FAISS có .d; Annoy không có
-    if pca_cfg.get("enable", False) or emb.shape[0] != index_dim:
-        try:
-            from joblib import load
-            pca_path = storage_cfg.get("pca_model", "models/pca_model.joblib")
-            if os.path.exists(pca_path):
-                pca = load(pca_path)
-                emb = pca.transform(emb.reshape(1, -1)).astype("float32")[0]
-        except Exception:
-            # nếu có lỗi khi load/transform PCA, giữ nguyên emb
-            pass
-
-    # sau PCA, norm bị thay đổi -> normalize lại nếu dùng IP/cosine
-    if "ip" in index_type:
-        emb = l2_normalize(emb)
-
-    emb = emb.reshape(1, -1).astype("float32")
-
-    with open(storage_cfg["characters_json"], "r", encoding="utf-8") as f:
-        characters = json.load(f)
-
-    def _search_func(
-        query_emb: np.ndarray,
-        top_k: int | None = k,
-        min_count: int = min_count,
-        *,
-        score_floor: float | None = None,
-        max_results: int | None = None,
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """Search the loaded index using the provided embedding."""
-        q = np.asarray(query_emb, dtype="float32")
-        if q.ndim == 1:
-            q = q[None, :]
-
-        # đảm bảo normalize khi index là inner-product (cosine)
-        if "ip" in index_type:
-            # normalize theo hàng
-            norms = np.linalg.norm(q, axis=1, keepdims=True) + 1e-12
-            q = q / norms
-
-        effective_floor = (
-            float(floor_threshold)
-            if score_floor is None
-            else float(score_floor)
-        )
-
-        if max_results is None:
-            effective_limit = base_query_limit
-        else:
-            effective_limit = max(1, int(max_results))
-        if top_k is not None:
-            effective_limit = max(effective_limit, int(top_k))
-
-        distances, indices = _query_index(index, q, effective_limit)
-
-        per_movie: Dict[str, List[Dict[str, Any]]] = {}
-        previews_root = storage_cfg.get("cluster_previews_root", "")
-
-        for dist, idx in zip(distances, indices):
-            score = float(dist)
-            threshold_active = (
-                score_floor is not None
-                or floor_threshold not in (0.0, float("-inf"))
-            )
-            if threshold_active:
-                if is_similarity_index:
-                    if score < effective_floor:
-                        continue
-                else:
-                    if score > effective_floor:
-                        continue
-
-            meta = id_map.get(int(idx))
-            if meta is None:
-                continue
-            if isinstance(meta, dict):
-                movie_id = str(meta.get("movie_id"))
-                character_id = str(meta.get("character_id"))
-            else:
-                movie_id = "0"
-                character_id = str(meta)
-
-            movie_data = characters.get(movie_id, {})
-            if isinstance(movie_data, dict) and character_id in movie_data:
-                char_info = movie_data.get(character_id)
-            else:
-                char_info = characters.get(character_id) if movie_id == "0" else None
-            if not char_info:
-                continue
-
-            count = int(char_info.get("count", 0))
-            if count < min_count:
-                continue
-
-            preview_paths = char_info.get("preview_paths", [])
-
-            def _is_absolute_url(path: str) -> bool:
-                if not isinstance(path, str):
-                    return False
-                if path.startswith("//"):
-                    return True
-                parsed = urlparse(path)
-                return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
-
-            normalized_previews = []
-            for p in preview_paths:
-                if _is_absolute_url(p) or os.path.isabs(p):
-                    normalized_previews.append(p)
-                else:
-                    normalized_previews.append(os.path.join(previews_root, p))
-            result = {
-                "movie_id": movie_id,
-                "movie": char_info.get("movie"),
-                "character_id": character_id,
-                "distance": score,
-                "count": count,
-                "track_count": int(char_info.get("track_count", count)),
-                "rep_image": char_info.get("rep_image", {}),
-                "preview_paths": normalized_previews,
-                "previews": char_info.get("previews", []),
-                "scenes": char_info.get("scenes", []),
-                "raw_cluster_ids": char_info.get("raw_cluster_ids", []),
-                "movies": [char_info.get("movie")] if char_info.get("movie") else [],
-            }
-
-            per_movie.setdefault(movie_id, []).append(result)
-
-        for movie_results in per_movie.values():
-            # Ensure the best match is always first regardless of index metric:
-            # similarity indexes prefer higher scores, distance indexes prefer
-            # lower scores.
-            movie_results.sort(
-                key=lambda item: item.get("distance", 0.0),
-                reverse=is_similarity_index,
-            )
-            if top_k is not None and len(movie_results) > int(top_k):
-                del movie_results[int(top_k) :]
-
-        return per_movie
-
-    floor_argument = (
-        floor_threshold
-        if (score_floor is not None or floor_threshold not in (0.0, float("-inf")))
-        else None
-    )
-
-    if return_emb:
-        return {
-            "embedding": emb[0].tolist(),
-            "search_func": _search_func,
-            "metadata": {
-                "index_type": index_type,
-                "is_similarity_index": is_similarity_index,
-            },
+    # 3) tính sim và gom theo movie
+    by_movie: Dict[str, List[Dict[str, Any]]] = {}
+    for proto in protos:
+        emb = _embed_proto_image(app, proto.rep_image)
+        if emb is None:
+            continue
+        sim = _cosine_sim(q_emb, emb)
+        if sim < float(score_floor):
+            continue
+        rec = {
+            "character_id": proto.character_id,
+            "distance": float(sim),  # FE/BE hiện đang dùng 'distance' = similarity
+            "rep_image": proto.rep_image,
+            "preview_paths": proto.preview_paths,
         }
+        by_movie.setdefault(proto.movie, []).append(rec)
 
-    return _search_func(
-        emb,
-        min_count=min_count,
-        score_floor=floor_argument,
-        max_results=base_query_limit,
-    )
+    # 4) sort và cắt top theo từng phim
+    for mv, items in by_movie.items():
+        items.sort(key=lambda d: float(d.get("distance", 0.0)), reverse=True)
+        if max_results and max_results > 0:
+            by_movie[mv] = items[: int(max_results)]
+
+    # 5) bỏ phim không đủ kết quả
+    if min_count > 1:
+        by_movie = {k: v for k, v in by_movie.items() if len(v) >= min_count}
+
+    return by_movie

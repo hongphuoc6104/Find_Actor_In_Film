@@ -1,434 +1,132 @@
 <template>
-  <section class="management-page">
-    <header class="management-page__header">
-      <div>
-        <h1>Quản lý phim</h1>
-        <p>Theo dõi trạng thái xử lý và tải lên phim mới cho hệ thống nhận diện.</p>
+  <div class="mx-auto max-w-5xl p-4 space-y-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between">
+      <h1 class="text-xl font-semibold text-slate-800">Quản lý phim đã xử lý</h1>
+      <div class="flex items-center gap-2">
+        <input
+          v-model="filterText"
+          type="text"
+          placeholder="Lọc theo tên phim…"
+          class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm focus:outline-none"
+        />
+        <button
+          class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:bg-slate-50"
+          @click="fetchMovies"
+          :disabled="loading"
+        >
+          Làm mới
+        </button>
       </div>
-      <button type="button" class="management-page__refresh" @click="refreshMovies" :disabled="isLoading">
-        Làm mới danh sách
-      </button>
-    </header>
-
-    <div class="management-page__layout">
-      <aside class="management-page__sidebar">
-        <section class="management-page__panel management-page__panel--upload">
-          <h2>Tải phim mới</h2>
-          <form @submit.prevent="submitUpload" class="upload-form">
-            <label>
-              <span>Tệp video</span>
-              <input ref="videoInput" type="file" accept="video/*" @change="onVideoChange" />
-            </label>
-
-            <div class="upload-form__grid">
-              <label>
-                <span>Mã phim (tùy chọn)</span>
-                <input type="text" v-model="form.movieId" placeholder="movie_001" />
-              </label>
-              <label>
-                <span>Nguồn</span>
-                <input type="text" v-model="form.source" placeholder="Blu-ray rip" />
-              </label>
-            </div>
-
-            <label class="upload-form__checkbox">
-              <input type="checkbox" v-model="form.refresh" />
-              <span>Làm mới dữ liệu nhận diện sau khi tải lên</span>
-            </label>
-
-            <button type="submit" :disabled="!form.file || isSubmitting">
-              <span v-if="isSubmitting">Đang tải…</span>
-              <span v-else>Gửi yêu cầu xử lý</span>
-            </button>
-          </form>
-
-          <p v-if="uploadError" class="upload-form__error">{{ uploadError }}</p>
-          <p v-else-if="uploadMessage" class="upload-form__info">{{ uploadMessage }}</p>
-        </section>
-      </aside>
-
-      <section class="management-page__content">
-        <section class="management-page__panel management-page__panel--list">
-          <header>
-            <h2>Danh sách phim</h2>
-            <p v-if="lastFetched" class="management-page__timestamp">Cập nhật lần cuối: {{ formatTimestamp(lastFetched) }}</p>
-          </header>
-
-          <div v-if="isLoading" class="management-page__placeholder">Đang tải danh sách phim…</div>
-          <div v-else-if="error" class="management-page__placeholder management-page__placeholder--error">{{ error }}</div>
-          <div v-else-if="!movies.length" class="management-page__placeholder">Chưa có phim nào trong hệ thống.</div>
-          <table v-else class="management-page__table">
-            <thead>
-              <tr>
-                <th>Tên phim</th>
-                <th>Nhân vật</th>
-                <th>Cảnh</th>
-                <th>Ảnh preview</th>
-                <th>Xác nhận</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="movie in movies" :key="movie.movie_id">
-                <td>
-                  <div class="management-page__movie-name">
-                    <strong>{{ movie.movie || `Phim #${movie.movie_id}` }}</strong>
-                    <span class="management-page__movie-id">ID: {{ movie.movie_id }}</span>
-                  </div>
-                </td>
-                <td>{{ movie.character_count }}</td>
-                <td>{{ movie.scene_count }}</td>
-                <td>{{ movie.preview_count }}</td>
-                <td>
-                  <span v-if="progress(movie.movie_id).total">
-                    {{ progress(movie.movie_id).confirmed }}/{{ progress(movie.movie_id).total }} đã xác nhận
-                  </span>
-                  <span v-else>Chưa xác nhận</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </section>
-      </section>
     </div>
-  </section>
+
+    <!-- Error -->
+    <div v-if="error" class="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-700 text-sm">
+      {{ error }}
+    </div>
+
+    <!-- Table -->
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-50 text-slate-500 uppercase text-xs">
+          <tr>
+            <th class="px-4 py-3 text-left">Phim</th>
+            <th class="px-4 py-3 text-left">Movie ID</th>
+            <th class="px-4 py-3 text-left">Số nhân vật</th>
+            <th class="px-4 py-3 text-left">Số cảnh</th>
+            <th class="px-4 py-3 text-left">Ảnh preview</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-if="loading">
+            <td colspan="5" class="px-4 py-6 text-center text-slate-500">Đang tải…</td>
+          </tr>
+
+          <tr
+            v-for="m in filteredMovies"
+            :key="m.movie_id"
+            class="border-t border-slate-100 hover:bg-slate-50"
+          >
+            <!-- TÊN PHIM (HIỂN THỊ THEO BACKEND) -->
+            <td class="px-4 py-3 font-medium text-slate-800">
+              {{ m.movie || m.movie_title || ('Phim ' + m.movie_id) }}
+            </td>
+
+            <!-- ID (để tra cứu, không dùng cho hiển thị chính) -->
+            <td class="px-4 py-3 text-slate-600">{{ m.movie_id }}</td>
+
+            <td class="px-4 py-3 text-slate-600">{{ m.character_count ?? 0 }}</td>
+            <td class="px-4 py-3 text-slate-600">{{ m.scene_count ?? 0 }}</td>
+            <td class="px-4 py-3 text-slate-600">
+              {{ m.preview_count ?? 0 }}
+            </td>
+          </tr>
+
+          <tr v-if="!loading && !filteredMovies.length">
+            <td colspan="5" class="px-4 py-6 text-center text-slate-500">
+              Không có phim nào.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import axios from 'axios'
+import { ref, computed, onMounted } from 'vue'
 
-import { API_BASE_URL } from '../config.js'
-import { useMovieCatalog } from '../composables/useMovieCatalog.js'
-import { useRecognitionStore } from '../composables/useRecognitionStore.js'
+const API_BASE =
+  (typeof window !== 'undefined' && window.__API_BASE__) || 'http://127.0.0.1:8000'
 
-const catalog = useMovieCatalog()
-const recognitionStore = useRecognitionStore()
+const movies = ref([])       // [{ movie_id, movie (tên), character_count, ... }]
+const loading = ref(false)
+const error = ref('')
+const filterText = ref('')
 
-const movies = computed(() => catalog.movies.value)
-const isLoading = computed(() => catalog.isLoading.value)
-const error = computed(() => catalog.error.value)
-const lastFetched = computed(() => catalog.lastFetched.value)
-
-const progress = (movieId) => recognitionStore.movieProgress(movieId)
-
-const videoInput = ref(null)
-
-const form = reactive({
-  file: null,
-  movieId: '',
-  source: '',
-  refresh: false,
+const filteredMovies = computed(() => {
+  const q = filterText.value.trim().toLowerCase()
+  if (!q) return movies.value
+  return movies.value.filter(m => {
+    const name = String(m.movie || m.movie_title || '').toLowerCase()
+    return name.includes(q)
+  })
 })
 
-const isSubmitting = ref(false)
-const uploadMessage = ref('')
-const uploadError = ref('')
-
-const onVideoChange = (event) => {
-  const file = event.target.files && event.target.files[0]
-  form.file = file ?? null
-}
-
-const submitUpload = async () => {
-  if (!form.file) {
-    uploadError.value = 'Vui lòng chọn tệp video để tải lên.'
-    uploadMessage.value = ''
-    return
-  }
-
-  const payload = new FormData()
-  payload.append('video', form.file)
-  if (form.movieId) {
-    payload.append('movie_id', form.movieId)
-  }
-  if (form.source) {
-    payload.append('source', form.source)
-  }
-  if (form.refresh) {
-    payload.append('refresh', 'true')
-  }
-
-  isSubmitting.value = true
-  uploadError.value = ''
-  uploadMessage.value = ''
-
+async function fetchMovies() {
+  loading.value = true
+  error.value = ''
   try {
-    const { data } = await axios.post(`${API_BASE_URL}/upload`, payload, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
-    uploadMessage.value =
-      data?.detail ?? data?.message ?? 'Đã gửi yêu cầu xử lý phim thành công.'
-    uploadError.value = ''
-    form.file = null
-    form.movieId = ''
-    form.source = ''
-    form.refresh = false
-    if (videoInput.value) {
-      videoInput.value.value = ''
+    const url = new URL('/movies', API_BASE)
+    const res = await fetch(url.toString())
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    const ct = res.headers.get('content-type') || ''
+    if (!ct.includes('application/json')) {
+      const t = await res.text().catch(() => '')
+      throw new SyntaxError(`Expected JSON, got: ${t.slice(0, 120)}...`)
     }
-    await catalog.fetchMovies()
-  } catch (error) {
-    const responseMessage =
-      error?.response?.data?.detail ??
-      error?.response?.data?.message ??
-      error?.message
-    uploadError.value = responseMessage ?? 'Không thể tải video lên.'
-    uploadMessage.value = ''
+    const data = await res.json()
+    // Backend có thể trả {movies: [...] } hoặc mảng trực tiếp
+    const arr = Array.isArray(data) ? data : (data.movies || [])
+    // Chuẩn hóa để luôn có 'movie' là tên phim
+    movies.value = arr.map(x => ({
+      movie_id: String(x.movie_id ?? ''),
+      movie: x.movie || x.movie_title || '',   // ← tên phim dùng để hiển thị
+      character_count: x.character_count ?? 0,
+      scene_count: x.scene_count ?? 0,
+      preview_count: x.preview_count ?? 0,
+    }))
+  } catch (e) {
+    console.error(e)
+    error.value = e?.message || 'Không tải được danh sách phim'
   } finally {
-    isSubmitting.value = false
+    loading.value = false
   }
 }
 
-const refreshMovies = () => {
-  catalog.fetchMovies()
-}
-
-const formatTimestamp = (isoString) => {
-  if (!isoString) {
-    return 'Chưa xác định'
-  }
-  try {
-    const date = new Date(isoString)
-    if (Number.isNaN(date.getTime())) {
-      return isoString
-    }
-    return date.toLocaleString()
-  } catch (error) {
-    return isoString
-  }
-}
-
-onMounted(() => {
-  catalog.fetchMovies()
-})
+onMounted(fetchMovies)
 </script>
 
 <style scoped>
-.management-page {
-  display: grid;
-  gap: 2.5rem;
-}
-
-.management-page__header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.management-page__header h1 {
-  margin: 0;
-  font-size: clamp(1.75rem, 2.8vw, 2.3rem);
-}
-
-.management-page__header p {
-  margin: 0.35rem 0 0;
-  color: #475569;
-  max-width: 38rem;
-}
-
-.management-page__refresh {
-  border: 1px solid #2563eb;
-  border-radius: 999px;
-  background: #2563eb;
-  color: #f8fafc;
-  padding: 0.55rem 1.35rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: filter 150ms ease;
-}
-
-.management-page__refresh:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.management-page__refresh:not(:disabled):hover {
-  filter: brightness(0.95);
-}
-
-.management-page__layout {
-  display: grid;
-  grid-template-columns: minmax(260px, 320px) 1fr;
-  gap: 2rem;
-  align-items: start;
-}
-
-.management-page__sidebar {
-  position: sticky;
-  top: 1.5rem;
-}
-
-.management-page__panel {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.75rem;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
-  padding: 1.5rem;
-  display: grid;
-  gap: 1.25rem;
-}
-
-.management-page__panel--upload h2,
-.management-page__panel--list h2 {
-  margin: 0;
-}
-
-.upload-form {
-  display: grid;
-  gap: 1rem;
-}
-
-.upload-form label {
-  display: grid;
-  gap: 0.5rem;
-  font-weight: 600;
-}
-
-.upload-form input[type='file'],
-.upload-form input[type='text'] {
-  border: 1px solid #cbd5f5;
-  border-radius: 0.65rem;
-  padding: 0.6rem 0.75rem;
-  font-size: 0.95rem;
-}
-
-.upload-form__grid {
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
-
-.upload-form__checkbox {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-weight: 500;
-}
-
-.upload-form button[type='submit'] {
-  justify-self: start;
-  border: 1px solid #2563eb;
-  border-radius: 999px;
-  background: #2563eb;
-  color: #f8fafc;
-  padding: 0.6rem 1.5rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: filter 150ms ease;
-}
-
-.upload-form button[type='submit']:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.upload-form button[type='submit']:not(:disabled):hover {
-  filter: brightness(0.95);
-}
-
-.upload-form__error {
-  margin: 0;
-  color: #b91c1c;
-  font-weight: 600;
-}
-
-.upload-form__info {
-  margin: 0;
-  color: #2563eb;
-}
-
-.management-page__panel--list {
-  display: grid;
-  gap: 1.5rem;
-}
-
-.management-page__panel--list > header {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  align-items: baseline;
-}
-
-.management-page__timestamp {
-  margin: 0;
-  color: #475569;
-  font-size: 0.9rem;
-}
-
-.management-page__placeholder {
-  padding: 1.25rem 1rem;
-  border-radius: 0.75rem;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  color: #475569;
-  text-align: center;
-}
-
-.management-page__placeholder--error {
-  color: #b91c1c;
-  border-color: rgba(239, 68, 68, 0.35);
-}
-
-.management-page__table {
-  width: 100%;
-  border-collapse: collapse;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.75rem;
-  overflow: hidden;
-}
-
-.management-page__table th,
-.management-page__table td {
-  padding: 1rem 1.1rem;
-  text-align: left;
-  border-bottom: 1px solid #e2e8f0;
-  font-size: 0.95rem;
-}
-
-.management-page__table th {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #1e293b;
-}
-
-.management-page__table tr:last-child td {
-  border-bottom: none;
-}
-
-.management-page__movie-name {
-  display: grid;
-  gap: 0.35rem;
-}
-
-.management-page__movie-id {
-  color: #475569;
-  font-size: 0.85rem;
-}
-
-@media (max-width: 960px) {
-  .management-page__layout {
-    grid-template-columns: 1fr;
-  }
-
-  .management-page__sidebar {
-    position: static;
-  }
-}
-
-@media (max-width: 768px) {
-  .management-page__table th,
-  .management-page__table td {
-    padding: 0.75rem;
-  }
-}
-
-@media (max-width: 640px) {
-  .management-page__panel {
-    padding: 1.25rem;
-  }
-}
+/* Tailwind đang dùng CDN trong index.html cho bản prototype */
 </style>

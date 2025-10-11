@@ -1,356 +1,244 @@
-"""Shared utilities for working with highlight scene metadata."""
 from __future__ import annotations
-import logging
 
 import math
-from typing import Any, Dict, Iterable, List, Sequence
+from dataclasses import dataclass, asdict
+from typing import Any, Dict, Iterable, List, Optional
 
 
-LOGGER = logging.getLogger(__name__)
+# ==============================
+# Config helpers
+# ==============================
 
-
-def _parse_float(value: Any) -> float | None:
-    """Best-effort conversion of ``value`` to a finite ``float``."""
-
-    if value is None:
-        return None
+def _as_float(v: Any, default: float = 0.0) -> float:
     try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(result):
-        return None
-    return float(result)
+        return float(v)
+    except Exception:
+        return default
 
 
-def _parse_int(value: Any) -> int | None:
-    """Best-effort conversion of ``value`` to ``int``."""
-
-    if value is None:
-        return None
+def _as_int(v: Any, default: int = 0) -> int:
     try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+        return int(v)
+    except Exception:
+        return default
 
 
-def _select_top_highlights(
-    highlights: List[Dict[str, Any]], limit: int | None
-) -> List[Dict[str, Any]]:
-    """Select the top highlights according to score, match count and start time."""
-
-    if not isinstance(highlights, list):
-        return []
-    if limit is None or limit <= 0 or len(highlights) <= limit:
-        return [dict(item) for item in highlights if isinstance(item, dict)]
-
-    def _score(item: Dict[str, Any]) -> float:
-        for key in ("max_score", "max_det_score", "avg_similarity"):
-            value = _parse_float(item.get(key))
-            if value is not None:
-                return value
-        return 0.0
-
-    def _match_count(item: Dict[str, Any]) -> int:
-        value = _parse_int(item.get("match_count"))
-        return value if value is not None else 0
-
-    ranked = sorted(
-        (item for item in highlights if isinstance(item, dict)),
-        key=lambda item: (
-            -_score(item),
-            -_match_count(item),
-            _parse_float(item.get("start")) or float("inf"),
-        ),
-    )
-    top = ranked[:limit]
-    top.sort(key=lambda item: _parse_float(item.get("start")) or float("inf"))
-    return [dict(item) for item in top]
-
-
-def _collect_numbers(entries: Iterable[Any]) -> List[float]:
-    values: List[float] = []
-    for entry in entries:
-        parsed = _parse_float(entry)
-        if parsed is not None:
-            values.append(parsed)
-    return values
-
-
-def _max_or_none(values: Sequence[float]) -> float | None:
-    return max(values) if values else None
-
-
-def _min_or_none(values: Sequence[float]) -> float | None:
-    return min(values) if values else None
-
-
-def normalise_highlights(
-    highlights: Any,
-    *,
-    highlight_limit: int | None = None,
-    merge_gap: float | None = None,
-    scene_start: float | None = None,
-    scene_end: float | None = None,
-    logger: logging.Logger | None = None,
-    scene_identifier: Any | None = None,
-) -> List[Dict[str, Any]]:
-    """Coalesce highlight entries and annotate similarity metadata.
-
-
-    Parameters
-    ----------
-    highlights:
-        Raw highlight payload from metadata. Non-dict entries are ignored.
-    highlight_limit:
-        Maximum number of highlights to keep before merging. ``None`` keeps all
-        entries.
-    merge_gap:
-        Maximum gap (seconds) between segments for them to be merged.
-    scene_start, scene_end:
-        Bounds used when padding isolated highlights.
-    logger:
-        Optional logger used for ``DEBUG_HL`` telemetry. Defaults to the module
-        logger.
-    scene_identifier:
-        Identifier included in debug logs for easier traceability.
+def get_highlight_cfg(cfg: Dict[str, Any] | None) -> Dict[str, Any]:
     """
+    Đọc block cấu hình 'highlight' từ config.yaml (nếu có) và đưa về giá trị an toàn.
+    Các khóa đang dùng:
 
-    if not isinstance(highlights, list) or not highlights:
+      - MIN_HL_DURATION_SEC:   độ dài tối thiểu cho một cảnh sau khi gộp
+      - MERGE_GAP_SEC:         nếu khoảng trống giữa 2 cảnh < giá trị này thì gộp lại
+      - TOP_K_HL_PER_SCENE:    tối đa số cảnh trả về cho mỗi nhân vật
+      - PAD_IF_FEW_SEC:        (mới) nới biên mỗi đầu nếu cảnh quá ít
+      - TARGET_MIN_SCENES:     (mới) ngưỡng “cảnh ít” để kích hoạt PAD_IF_FEW_SEC
+    """
+    hl = dict(cfg.get("highlight", {})) if isinstance(cfg, dict) else {}
+
+    # Giá trị chuẩn xác & mặc định hợp lý
+    return {
+        "MIN_HL_DURATION_SEC": _as_float(hl.get("MIN_HL_DURATION_SEC", 4.0), 4.0),
+        "MERGE_GAP_SEC": _as_float(hl.get("MERGE_GAP_SEC", 6.0), 6.0),
+        "TOP_K_HL_PER_SCENE": _as_int(hl.get("TOP_K_HL_PER_SCENE", 3), 3),
+        # Thêm hai tham số mới cho việc nới biên khi quá ít cảnh
+        "PAD_IF_FEW_SEC": _as_float(hl.get("PAD_IF_FEW_SEC", 1.5), 1.5),
+        "TARGET_MIN_SCENES": _as_int(hl.get("TARGET_MIN_SCENES", 2), 2),
+    }
+
+
+# ==============================
+# Core structures
+# ==============================
+
+@dataclass
+class Scene:
+    """
+    Đại diện một đoạn xuất hiện (đơn vị: giây).
+    Các trường phụ (score/video_url/…​) giữ nguyên nếu có trong input.
+    """
+    start_time: float
+    end_time: float
+    score: float = 1.0
+    video_url: Optional[str] = None
+    # các trường tự do khác
+    extra: Dict[str, Any] | None = None
+
+    def duration(self) -> float:
+        return max(0.0, self.end_time - self.start_time)
+
+
+# ==============================
+# Utilities
+# ==============================
+
+def _norm_scene_dict(d: Dict[str, Any]) -> Scene:
+    """Chuyển mọi dict cảnh về `Scene` với mặc định an toàn."""
+    st = _as_float(d.get("start_time"), 0.0)
+    et = _as_float(d.get("end_time"), st)
+    if et < st:
+        st, et = et, st
+    return Scene(
+        start_time=st,
+        end_time=et,
+        score=_as_float(d.get("score"), 1.0),
+        video_url=d.get("video_url"),
+        extra={k: v for k, v in d.items() if k not in {"start_time", "end_time", "score", "video_url"}},
+    )
+
+
+def _effective_score(s: Scene) -> float:
+    """
+    Điểm xếp hạng cảnh: kết hợp score (nếu có) và độ dài (log1p).
+    Mục tiêu: cảnh dài/ổn định sẽ ưu tiên hơn cảnh ngắn dù score cao.
+    """
+    dur = max(0.0, s.duration())
+    base = float(s.score) if math.isfinite(s.score) else 1.0
+    return base * math.log1p(dur + 1e-6)
+
+
+def _merge_sorted(scenes: List[Scene], merge_gap: float) -> List[Scene]:
+    """Gộp các cảnh đã **được sort theo start_time** nếu gap giữa chúng < merge_gap."""
+    if not scenes:
         return []
-
-    effective_logger = logger or LOGGER
-    selected = _select_top_highlights(highlights, highlight_limit)
-    prepared_segments: List[Dict[str, Any]] = []
-
-    merge_gap_value = 0.0
-    if merge_gap is not None:
-        merge_gap_value = max(float(merge_gap), 0.0)
-
-    start_bound = _parse_float(scene_start)
-    end_bound = _parse_float(scene_end)
-
-    for index, raw_highlight in enumerate(selected):
-        start = _parse_float(raw_highlight.get("start"))
-        end = _parse_float(raw_highlight.get("end"))
-        if start is None or end is None:
-            continue
-
-        if end < start:
-            start, end = end, start
-
-        highlight_copy = dict(raw_highlight)
-        match_count = _parse_int(highlight_copy.get("match_count"))
-        if match_count is None or match_count <= 0:
-            match_count = 1
-
-        duration = _parse_float(highlight_copy.get("duration"))
-        if duration is None:
-            duration = max(end - start, 0.0)
-
-        # Pad isolated hits shorter than 1s by +/-2s within scene bounds.
-        if match_count <= 1 and duration < 1.0:
-            pad_seconds = 2.0
-            if start_bound is not None:
-                start = max(start - pad_seconds, start_bound)
-            else:
-                start -= pad_seconds
-            if end_bound is not None:
-                end = min(end + pad_seconds, end_bound)
-            else:
-                end += pad_seconds
-            if end < start:
-                end = start
-            duration = max(end - start, 0.0)
-
-        highlight_copy["start"] = round(start, 3)
-        highlight_copy["end"] = round(end, 3)
-        highlight_copy["duration"] = round(duration, 3)
-        highlight_copy["match_count"] = int(match_count)
-
-        det_scores = []
-        for key in ("max_det_score", "min_det_score", "det_score"):
-            det_scores.extend(_collect_numbers([highlight_copy.get(key)]))
-
-        similarity_candidates: List[float] = []
-        for key in (
-                "score",
-                "max_score",
-                "avg_similarity",
-                "max_similarity",
-                "actor_similarity",
-                "similarity",
-        ):
-            similarity_candidates.extend(_collect_numbers([highlight_copy.get(key)]))
-
-        prepared_segments.append(
-            {
-                "start": float(highlight_copy["start"]),
-                "end": float(highlight_copy["end"]),
-                "match_count": int(match_count),
-                "det_scores": det_scores,
-                "similarities": similarity_candidates,
-                "payload": highlight_copy,
-                "index": index,
-            }
-        )
-
-    if not prepared_segments:
-        return []
-
-    prepared_segments.sort(key=lambda item: (item["start"], item["end"], item["index"]))
-
-    merged_segments: List[Dict[str, Any]] = []
-    current: Dict[str, Any] | None = None
-
-    def _finalise(segment: Dict[str, Any]) -> Dict[str, Any]:
-        start_value = segment["start"]
-        end_value = segment["end"]
-        duration_value = max(end_value - start_value, 0.0)
-        det_scores = segment.get("det_scores", [])
-        similarities = segment.get("similarities", [])
-        sources = segment.get("sources", [])
-        total_match_count = int(segment.get("match_count", 0))
-
-        best_similarity = _max_or_none(similarities)
-        if best_similarity is None:
-            best_similarity = 0.0
-        similarity_percent = round(best_similarity * 100.0, 2)
-
-        merged_payload: Dict[str, Any] = {
-            "start": round(start_value, 3),
-            "end": round(end_value, 3),
-            "duration": round(duration_value, 3),
-            "match_count": total_match_count,
-            "sources": [
-                {"raw": dict(source)}
-                for source in sources
-                if isinstance(source, dict)
-            ],
-        }
-
-        if det_scores:
-            merged_payload["max_det_score"] = max(det_scores)
-            merged_payload["min_det_score"] = min(det_scores)
-
-        merged_payload["score"] = float(best_similarity)
-        merged_payload["max_score"] = float(best_similarity)
-        if similarities:
-            merged_payload["max_similarity"] = max(similarities)
-            merged_payload["min_similarity"] = min(similarities)
-            merged_payload["avg_similarity"] = sum(similarities) / len(similarities)
-
-        merged_payload["similarity_percent"] = similarity_percent
-
-        # Merge union-able fields from sources
-        matched_clusters: set[str] = set()
-        matched_final_ids: set[str] = set()
-        supporting_detections: List[Any] = []
-        has_target = False
-
-        for source in sources:
-            clusters = source.get("matched_cluster_ids")
-            if isinstance(clusters, (list, set, tuple)):
-                matched_clusters.update(str(c) for c in clusters if c is not None)
-            final_ids = source.get("matched_final_character_ids")
-            if isinstance(final_ids, (list, set, tuple)):
-                matched_final_ids.update(str(c) for c in final_ids if c is not None)
-            detections = source.get("supporting_detections")
-            if isinstance(detections, list):
-                supporting_detections.extend(
-                    det for det in detections if isinstance(det, dict)
-                )
-            if source.get("has_target"):
-                has_target = True
-
-        if matched_clusters:
-            merged_payload["matched_cluster_ids"] = sorted(matched_clusters)
-        if matched_final_ids:
-            merged_payload["matched_final_character_ids"] = sorted(matched_final_ids)
-        if supporting_detections:
-            merged_payload["supporting_detections"] = supporting_detections
-        if has_target:
-            merged_payload["has_target"] = True
-
-        return merged_payload
-
-    for segment in prepared_segments:
-        if current is None:
-            current = {
-                "start": segment["start"],
-                "end": segment["end"],
-                "match_count": segment["match_count"],
-                "det_scores": list(segment["det_scores"]),
-                "similarities": list(segment["similarities"]),
-                "sources": [segment["payload"]],
-            }
-            continue
-
-        gap = segment["start"] - current["end"]
-        if gap <= merge_gap_value:
-            current["end"] = max(current["end"], segment["end"])
-            current["match_count"] = int(current.get("match_count", 0)) + int(
-                segment["match_count"]
+    merged: List[Scene] = [scenes[0]]
+    for sc in scenes[1:]:
+        last = merged[-1]
+        # Nếu chồng lấp hoặc gap nhỏ hơn ngưỡng, gộp lại
+        if sc.start_time <= last.end_time + merge_gap:
+            merged[-1] = Scene(
+                start_time=last.start_time,
+                end_time=max(last.end_time, sc.end_time),
+                score=max(last.score, sc.score),  # giữ score cao nhất của 2 đoạn
+                video_url=last.video_url or sc.video_url,
+                extra=(last.extra or {}) | (sc.extra or {}),
             )
-            current.setdefault("det_scores", []).extend(segment["det_scores"])
-            current.setdefault("similarities", []).extend(segment["similarities"])
-            current.setdefault("sources", []).append(segment["payload"])
         else:
-            merged_segments.append(_finalise(current))
-            current = {
-                "start": segment["start"],
-                "end": segment["end"],
-                "match_count": segment["match_count"],
-                "det_scores": list(segment["det_scores"]),
-                "similarities": list(segment["similarities"]),
-                "sources": [segment["payload"]],
-            }
+            merged.append(sc)
+    return merged
 
-    if current is not None:
-        merged_segments.append(_finalise(current))
 
-    if merged_segments:
-        try:
-            effective_logger.debug(
-                "DEBUG_HL normalise highlights",
-                extra={
-                    "scene": scene_identifier,
-                    "merge_gap": merge_gap_value,
-                    "raw_count": len(prepared_segments),
-                    "merged_count": len(merged_segments),
-                    "raw": [
-                        (seg["start"], seg["end"])
-                        for seg in prepared_segments
-                    ],
-                    "merged": [
-                        (seg.get("start"), seg.get("end")) for seg in merged_segments
-                    ],
-                },
+def _pad_scenes_if_few(scenes: List[Scene], pad_each_side: float) -> List[Scene]:
+    """
+    Nới mỗi đầu của từng cảnh một lượng 'pad_each_side' giây để đỡ hụt khúc mở/đóng.
+    Dùng khi tổng số cảnh quá ít (ví dụ 1 cảnh).
+    """
+    padded: List[Scene] = []
+    for sc in scenes:
+        padded.append(
+            Scene(
+                start_time=max(0.0, sc.start_time - pad_each_side),
+                end_time=max(sc.end_time, sc.start_time + 0.01) + pad_each_side,
+                score=sc.score,
+                video_url=sc.video_url,
+                extra=sc.extra,
             )
-        except Exception as exc:  # pragma: no cover - logging safety
-            context = {
-                "movie": None,
-                "scene": None,
-                "track": None,
-            }
-            if isinstance(scene_identifier, dict):
-                context["movie"] = scene_identifier.get("movie")
-                context["scene"] = scene_identifier.get("scene")
-                context["track"] = scene_identifier.get("track") or scene_identifier.get(
-                    "track_id"
-                )
-            else:
-                context["scene"] = scene_identifier
+        )
+    return padded
 
-            fallback_logger = effective_logger if hasattr(effective_logger, "warning") else LOGGER
-            fallback_logger.warning(
-                "Failed to emit highlight normalisation debug log for context %s",
-                context,
-                exc_info=exc,
-                extra={
-                    "movie": context.get("movie"),
-                    "scene": context.get("scene"),
-                    "track": context.get("track"),
-                },
-            )
-    return merged_segments
+
+# ==============================
+# Public API
+# ==============================
+
+def consolidate_scenes(
+    raw_scenes: Iterable[Dict[str, Any] | Scene],
+    *,
+    min_duration: float = 4.0,
+    merge_gap: float = 6.0,
+    top_k: int = 3,
+    pad_if_few: float = 1.5,
+    target_min_scenes: int = 2,
+    clamp_to: Optional[tuple[float, float]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Nhận một danh sách cảnh rời rạc (thường là từ tracklets), trả về danh sách
+    cảnh đã gộp & xếp hạng để hiển thị cho FE.
+
+    Quy tắc:
+      1) sort theo start_time
+      2) gộp nếu gap < merge_gap
+      3) loại các cảnh < min_duration
+      4) nếu tổng số cảnh < target_min_scenes → nới biên mỗi cảnh thêm pad_if_few
+      5) xếp hạng theo _effective_score() và cắt top_k
+      6) clamp thời gian vào [lo, hi] nếu clamp_to được cung cấp
+
+    Trả về: List[dict] có các khóa {start_time, end_time, score, video_url, ...}
+    """
+    # Chuẩn hóa input
+    scenes: List[Scene] = [
+        s if isinstance(s, Scene) else _norm_scene_dict(dict(s))
+        for s in (raw_scenes or [])
+    ]
+    if not scenes:
+        return []
+
+    # Sort để gộp ổn định
+    scenes.sort(key=lambda s: (s.start_time, s.end_time))
+
+    # Gộp các cảnh gần nhau / chồng lấp
+    scenes = _merge_sorted(scenes, merge_gap=merge_gap)
+
+    # Loại cảnh quá ngắn
+    scenes = [s for s in scenes if s.duration() >= min_duration]
+    if not scenes:
+        return []
+
+    # Nếu quá ít cảnh → nới biên mỗi cảnh một chút
+    if len(scenes) < max(1, int(target_min_scenes)):
+        scenes = _pad_scenes_if_few(scenes, pad_each_side=max(0.0, pad_if_few))
+        # gộp lại lần nữa vì có thể biên đè nhau
+        scenes.sort(key=lambda s: (s.start_time, s.end_time))
+        scenes = _merge_sorted(scenes, merge_gap=merge_gap)
+
+    # Clamp theo [0, duration] nếu biết
+    if clamp_to is not None:
+        lo, hi = clamp_to
+        lo = max(0.0, float(lo))
+        hi = max(lo, float(hi))
+        tmp: List[Scene] = []
+        for s in scenes:
+            st = min(max(s.start_time, lo), hi)
+            et = min(max(s.end_time, lo), hi)
+            if et - st > 1e-3:
+                tmp.append(Scene(st, et, s.score, s.video_url, s.extra))
+        scenes = tmp
+
+    # Xếp hạng và lấy top_k
+    scenes.sort(key=_effective_score, reverse=True)
+    if top_k and top_k > 0 and len(scenes) > top_k:
+        scenes = scenes[:top_k]
+
+    # Xuất dict (giữ nguyên các field phụ)
+    out: List[Dict[str, Any]] = []
+    for s in scenes:
+        d = asdict(s)
+        # Flatten extra (nếu có)
+        if d.get("extra"):
+            for k, v in list(d["extra"].items()):
+                if k not in d:
+                    d[k] = v
+        d.pop("extra", None)
+        out.append(d)
+    return out
+
+
+def consolidate_from_cfg(
+    raw_scenes: Iterable[Dict[str, Any] | Scene],
+    cfg: Dict[str, Any] | None,
+    *,
+    clamp_to: Optional[tuple[float, float]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Bọc tiện lợi: đọc thông số từ config.yaml (block `highlight`) rồi gọi consolidate_scenes.
+    """
+    hcfg = get_highlight_cfg(cfg)
+    return consolidate_scenes(
+        raw_scenes,
+        min_duration=hcfg["MIN_HL_DURATION_SEC"],
+        merge_gap=hcfg["MERGE_GAP_SEC"],
+        top_k=hcfg["TOP_K_HL_PER_SCENE"],
+        pad_if_few=hcfg["PAD_IF_FEW_SEC"],
+        target_min_scenes=hcfg["TARGET_MIN_SCENES"],
+        clamp_to=clamp_to,
+    )

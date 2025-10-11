@@ -1,61 +1,131 @@
-import { computed, reactive } from 'vue'
-import axios from 'axios'
+// Composable quản lý danh mục phim và map id <-> title
+// Dùng chung cho FaceSearch + MovieManagementPage
 
-import { API_BASE_URL } from '../config.js'
+import { ref, computed } from 'vue'
 
-const state = reactive({
-  movies: [],
-  isLoading: false,
-  error: '',
-  lastFetched: null,
-})
+// API base: ưu tiên window.__API_BASE__ (được BE inject) rồi tới config.js, cuối cùng fallback
+let API_BASE =
+  (typeof window !== 'undefined' && window.__API_BASE__) ||
+  (import.meta?.env?.VITE_API_BASE || 'http://127.0.0.1:8000')
 
-const normaliseNumber = (value, fallback = 0) => {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value
+// Singleton để toàn bộ app dùng chung 1 nguồn dữ liệu
+let _singleton
+
+function createCatalog() {
+  const loading = ref(false)
+  const error = ref('')
+  const movies = ref([]) // [{ movie_id: 0, movie: 'EMCHUA18', label: 'EMCHUA18', video_path: '...' }, ...]
+
+  // Map thuận tiện
+  const idToName = ref({})    // {'0': 'EMCHUA18', '1': 'GAIGIALAMCHIEU', ...}
+  const nameToId = ref({})    // {'EMCHUA18': '0', ...}
+
+  const movieCount = computed(() => movies.value.length)
+
+  function _rebuildMaps(list) {
+    const id2 = {}
+    const name2id = {}
+    for (const m of list) {
+      // Chuẩn hóa
+      const id = (m?.movie_id ?? '').toString()
+      const title = (m?.movie ?? m?.label ?? '').toString().trim()
+      if (!title) continue
+
+      if (id && id !== 'null' && id !== 'undefined' && id !== '') {
+        id2[id] = title
+      }
+      // nameToId chỉ set khi có id hợp lệ
+      if (title && id && id !== 'null' && id !== 'undefined' && id !== '') {
+        name2id[title] = id
+      }
+    }
+    idToName.value = id2
+    nameToId.value = name2id
   }
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : fallback
+
+  async function refresh() {
+    loading.value = true
+    error.value = ''
+    try {
+      const url = new URL('/movies', API_BASE).toString()
+      const res = await fetch(url, { method: 'GET' })
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '')
+        throw new Error(`GET /movies thất bại: ${res.status} ${txt.slice(0, 120)}`)
+      }
+      const data = await res.json()
+      const list = Array.isArray(data?.movies) ? data.movies : []
+
+      movies.value = list
+      _rebuildMaps(list)
+    } catch (e) {
+      console.error(e)
+      error.value = e?.message || 'Tải danh sách phim thất bại'
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function ensureLoaded() {
+    if (movies.value.length === 0 && !loading.value) {
+      await refresh()
+    }
+  }
+
+  // Trả về tên phim từ:
+  // - movie object (có thể có movie_id, movie, movie_title...)
+  // - movie_id (số hoặc chuỗi)
+  // - title (chuỗi)
+  function getMovieTitle(any) {
+    // 1) Nếu là object trả về trực tiếp tên nếu đã có
+    if (any && typeof any === 'object') {
+      const direct =
+        (any.movie && String(any.movie).trim()) ||
+        (any.movie_title && String(any.movie_title).trim()) ||
+        (any.label && String(any.label).trim())
+      if (direct) return direct
+
+      const id = (any.movie_id ?? '').toString()
+      if (id && idToName.value[id]) return idToName.value[id]
+    }
+
+    // 2) Nếu là số/chuỗi id
+    const s = (any ?? '').toString().trim()
+    if (!s) return ''
+    if (idToName.value[s]) return idToName.value[s]
+
+    // 3) Có thể chính là title
+    return s
+  }
+
+  // Trả về id từ title (nếu có), else ''
+  function getMovieIdByTitle(title) {
+    const t = (title ?? '').toString().trim()
+    return nameToId.value[t] ?? ''
+  }
+
+  return {
+    // state
+    loading,
+    error,
+    movies,
+    movieCount,
+
+    // maps
+    idToName,
+    nameToId,
+
+    // actions
+    refresh,
+    ensureLoaded,
+
+    // helpers
+    getMovieTitle,
+    getMovieIdByTitle,
+  }
 }
 
-const normaliseMovies = (payload) => {
-  if (!Array.isArray(payload)) {
-    return []
-  }
-
-  return payload.map((movie) => ({
-    movie_id: String(movie?.movie_id ?? ''),
-    movie: movie?.movie ?? movie?.title ?? null,
-    character_count: normaliseNumber(movie?.character_count),
-    scene_count: normaliseNumber(movie?.scene_count),
-    preview_count: normaliseNumber(movie?.preview_count),
-  }))
+export default function useMovieCatalog() {
+  if (!_singleton) _singleton = createCatalog()
+  return _singleton
 }
-
-const fetchMovies = async () => {
-  state.isLoading = true
-  state.error = ''
-
-  try {
-    const { data } = await axios.get(`${API_BASE_URL}/movies`)
-    state.movies = normaliseMovies(data)
-    state.lastFetched = new Date().toISOString()
-  } catch (error) {
-    const responseMessage =
-      error?.response?.data?.detail ??
-      error?.response?.data?.message ??
-      error?.message
-    state.movies = []
-    state.error = responseMessage ?? 'Không thể tải danh sách phim.'
-  } finally {
-    state.isLoading = false
-  }
-}
-
-export const useMovieCatalog = () => ({
-  movies: computed(() => state.movies),
-  isLoading: computed(() => state.isLoading),
-  error: computed(() => state.error),
-  lastFetched: computed(() => state.lastFetched),
-  fetchMovies,
-})

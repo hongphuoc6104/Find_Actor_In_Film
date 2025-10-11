@@ -1,3 +1,4 @@
+# tasks/embedding_task.py
 import os
 import time
 import hashlib
@@ -8,26 +9,27 @@ import pandas as pd
 from tqdm import tqdm
 from prefect import task
 from insightface.app import FaceAnalysis
+
 from utils.config_loader import load_config
 from utils.image_utils import calculate_blur_score, check_brightness, check_contrast
 from utils.vector_utils import l2_normalize
 from .tracklet_task import link_tracklets
 
 
-# --- Các hàm tiện ích ---
+# -------------------- Tiện ích -------------------- #
+
 def make_global_id(movie: str, frame: str, bbox: np.ndarray) -> str:
     s = f"{movie}|{frame}|{int(bbox[0])}|{int(bbox[1])}|{int(bbox[2])}|{int(bbox[3])}"
     return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
-# --- Hàm xử lý từng phim ---
-def process_single_movie(movie_name, movie_frames_path, app, config):
+# ---------------- Xử lý từng phim ---------------- #
+
+def process_single_movie(movie_name: str, movie_frames_path: str, app: FaceAnalysis, config: dict):
     image_files = sorted(
-        [
-            os.path.join(movie_frames_path, f)
-            for f in os.listdir(movie_frames_path)
-            if f.lower().endswith((".jpg", ".jpeg", ".png"))
-        ]
+        os.path.join(movie_frames_path, f)
+        for f in os.listdir(movie_frames_path)
+        if f.lower().endswith((".jpg", ".jpeg", ".png"))
     )
 
     movie_specific_rows = []
@@ -49,7 +51,7 @@ def process_single_movie(movie_name, movie_frames_path, app, config):
             if img is None:
                 continue
 
-            # --- Resize trước khi detect ---
+            # Resize trước khi detect để tăng tốc
             scale = 1.0
             processing_img = img
             h, w, _ = processing_img.shape
@@ -57,7 +59,7 @@ def process_single_movie(movie_name, movie_frames_path, app, config):
                 scale = config["pre_resize_dim"] / max(h, w)
                 processing_img = cv2.resize(img, (int(w * scale), int(h * scale)))
 
-            faces = app.get(processing_img)
+            faces = app.get(processing_img) or []
             if not faces:
                 continue
 
@@ -66,7 +68,7 @@ def process_single_movie(movie_name, movie_frames_path, app, config):
 
             good_quality_faces = []
             for face in faces:
-                # --- Filter tầng 1 ---
+                # Lọc tầng 1: điểm detect + diện tích khuôn mặt
                 if face.det_score < q_filters.get("min_det_score", 0.4):
                     stats["removed_det_score"] += 1
                     continue
@@ -75,13 +77,13 @@ def process_single_movie(movie_name, movie_frames_path, app, config):
                     stats["removed_face_ratio"] += 1
                     continue
 
-                # --- Crop khuôn mặt gốc ---
+                # Crop theo bbox ở toạ độ gốc
                 orig_x1, orig_y1, orig_x2, orig_y2 = np.round(face.bbox / scale).astype(int)
                 face_crop = img[orig_y1:orig_y2, orig_x1:orig_x2]
                 if face_crop.size == 0:
                     continue
 
-                # --- Filter tầng 2: brightness + contrast ---
+                # Lọc tầng 2: sáng + tương phản
                 gray_face_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
                 if q_filters.get("brightness", {}).get("enable") and not check_brightness(
                     gray_face_crop, q_filters["brightness"]["value_range"]
@@ -92,7 +94,7 @@ def process_single_movie(movie_name, movie_frames_path, app, config):
                 ):
                     continue
 
-                # --- Filter tầng 3: blur ---
+                # Lọc tầng 3: độ nét
                 blur_score = calculate_blur_score(face_crop)
                 if blur_score < q_filters.get("min_blur_clarity", 60.0):
                     stats["removed_blur"] += 1
@@ -100,6 +102,7 @@ def process_single_movie(movie_name, movie_frames_path, app, config):
 
                 good_quality_faces.append(face)
 
+            # Chọn top N gương mặt tốt nhất trên frame
             good_quality_faces.sort(key=lambda f: f.det_score, reverse=True)
             selected_faces = good_quality_faces[: config["max_faces_per_frame"]]
 
@@ -108,15 +111,11 @@ def process_single_movie(movie_name, movie_frames_path, app, config):
                     continue
 
                 original_bbox = np.round(face.bbox / scale).astype(np.int32)
-                face_crop = img[
-                    original_bbox[1] : original_bbox[3], original_bbox[0] : original_bbox[2]
-                ]
+                face_crop = img[original_bbox[1]: original_bbox[3], original_bbox[0]: original_bbox[2]]
                 if face_crop.size == 0:
                     continue
 
-                global_id = make_global_id(
-                    movie_name, os.path.basename(img_path), original_bbox
-                )
+                global_id = make_global_id(movie_name, os.path.basename(img_path), original_bbox)
                 crop_path = os.path.join(movie_face_crop_dir, f"{global_id}.jpg")
                 cv2.imwrite(crop_path, face_crop)
 
@@ -144,9 +143,17 @@ def process_single_movie(movie_name, movie_frames_path, app, config):
     return movie_specific_rows, stats
 
 
-# --- Task chính ---
+# -------------------- Task chính -------------------- #
+
 @task(name="Embedding Task")
 def embedding_task():
+    """
+    Chế độ mặc định: xử lý tất cả thư mục frames.
+    Chế độ đơn-phim: nếu set ENV FS_ACTIVE_MOVIE, chỉ xử lý đúng phim đó.
+    - Sinh embeddings + face crops
+    - Link tracklet, tính track_centroid (median + L2)
+    - Ghi parquet per-movie và cập nhật metadata
+    """
     cfg = load_config()
     q_cfg = cfg.get("quality_filters", {})
     config = {
@@ -164,14 +171,20 @@ def embedding_task():
     }
     storage_cfg = config["storage"]
 
+    # InsightFace init
     print("Initializing InsightFace model...")
     app = FaceAnalysis(
         name=config["embedding"]["model"],
         providers=config["embedding"]["providers"],
     )
-    app.prepare(ctx_id=0, det_size=(640, 640))
+    try:
+        app.prepare(ctx_id=0, det_size=(640, 640))
+    except Exception:
+        # fallback CPU nếu không có GPU
+        app.prepare(ctx_id=-1, det_size=(640, 640))
     print("Model ready.")
 
+    # Đọc metadata cũ (nếu có)
     metadata_filepath = storage_cfg["metadata_json"]
     try:
         with open(metadata_filepath, "r", encoding="utf-8") as f:
@@ -183,52 +196,66 @@ def embedding_task():
     embeddings_folder = storage_cfg["embeddings_folder_per_movie"]
     os.makedirs(embeddings_folder, exist_ok=True)
 
-    movie_folders = [
-        d for d in os.listdir(frames_root) if os.path.isdir(os.path.join(frames_root, d))
-    ]
+    # Lấy danh sách phim theo thư mục frames
+    movie_folders = [d for d in os.listdir(frames_root) if os.path.isdir(os.path.join(frames_root, d))]
+
+    # Chế độ đơn-phim
+    active_movie = (os.getenv("FS_ACTIVE_MOVIE") or "").strip()
+    if active_movie:
+        if active_movie in movie_folders:
+            movie_folders = [active_movie]
+            print(f"[Embedding] Chế độ đơn-phim: chỉ xử lý '{active_movie}'")
+        else:
+            print(f"[Embedding] Không tìm thấy thư mục frames cho '{active_movie}' tại '{frames_root}'. Bỏ qua embedding.")
+            return True
+
     new_data_generated = False
     quality_logs = []
 
     for movie_name in movie_folders:
         expected_parquet_path = os.path.join(embeddings_folder, f"{movie_name}.parquet")
+
+        # Nếu đã có file và đã có track_centroid -> bỏ qua
         if os.path.exists(expected_parquet_path):
-            df_movie = pd.read_parquet(expected_parquet_path)
-            if "track_centroid" in df_movie.columns:
+            try:
+                df_movie = pd.read_parquet(expected_parquet_path)
+            except Exception:
+                df_movie = pd.DataFrame()
+            if not df_movie.empty and "track_centroid" in df_movie.columns:
                 print(f"File embedding cho phim '{movie_name}' đã tồn tại. Bỏ qua.")
+                # đảm bảo metadata tối thiểu
+                if movie_name not in all_metadata:
+                    all_metadata[movie_name] = {}
+                all_metadata[movie_name]["num_faces_detected"] = len(df_movie)
+                all_metadata[movie_name]["embedding_file_path"] = expected_parquet_path
                 continue
 
-            print(
-                f"File embedding cho phim '{movie_name}' thiếu track_centroid. Đang cập nhật..."
-            )
-            df_movie = link_tracklets(df_movie)
-            centroids = (
-                df_movie.groupby("track_id")["emb"]
-                .apply(
-                    lambda e: l2_normalize(
-                        np.median(np.stack(e.to_list()), axis=0)
-                    )
+            # Nếu thiếu track_centroid -> bổ sung
+            if not df_movie.empty:
+                print(f"File embedding cho phim '{movie_name}' thiếu track_centroid. Đang cập nhật...")
+                df_movie = link_tracklets(df_movie)
+                centroids = (
+                    df_movie.groupby("track_id")["emb"]
+                    .apply(lambda e: l2_normalize(np.median(np.stack(e.to_list()), axis=0)))
+                    .rename("track_centroid")
                 )
-                .rename("track_centroid")
-            )
-            df_movie = df_movie.merge(centroids, on="track_id")
-            df_movie["track_centroid"] = df_movie["track_centroid"].apply(
-                lambda x: x.tolist()
-            )
-            df_movie.to_parquet(expected_parquet_path, index=False)
-            new_data_generated = True
-            if movie_name not in all_metadata:
-                all_metadata[movie_name] = {}
-            all_metadata[movie_name]["num_faces_detected"] = len(df_movie)
-            all_metadata[movie_name]["embedding_file_path"] = expected_parquet_path
-            continue
+                df_movie = df_movie.merge(centroids, on="track_id")
+                df_movie["track_centroid"] = df_movie["track_centroid"].apply(lambda x: x.tolist())
+                df_movie.to_parquet(expected_parquet_path, index=False)
+                new_data_generated = True
+                if movie_name not in all_metadata:
+                    all_metadata[movie_name] = {}
+                all_metadata[movie_name]["num_faces_detected"] = len(df_movie)
+                all_metadata[movie_name]["embedding_file_path"] = expected_parquet_path
+                continue
+            # nếu đọc lỗi/empty -> xử lý lại từ đầu như bên dưới
 
+        # Sinh mới embeddings cho phim
         new_data_generated = True
         print(f"\nProcessing movie: {movie_name}")
         movie_frames_path = os.path.join(frames_root, movie_name)
 
-        movie_rows, q_stats = process_single_movie(
-            movie_name, movie_frames_path, app, config
-        )
+        movie_rows, q_stats = process_single_movie(movie_name, movie_frames_path, app, config)
         quality_logs.append({"movie": movie_name, **q_stats})
 
         if movie_name not in all_metadata:
@@ -242,37 +269,31 @@ def embedding_task():
 
         df_movie = pd.DataFrame(movie_rows)
 
-        # Liên kết các khuôn mặt liên tiếp thành tracklet và gán track_id
+        # Liên kết liên tiếp thành tracklet + gán track_id
         df_movie = link_tracklets(df_movie)
 
-        # Tính track_centroid cho từng track bằng median và chuẩn hóa L2
+        # Tính track_centroid (median + L2) theo track
         centroids = (
             df_movie.groupby("track_id")["emb"]
-            .apply(
-                lambda e: l2_normalize(
-                    np.median(np.stack(e.to_list()), axis=0)
-                )
-            )
+            .apply(lambda e: l2_normalize(np.median(np.stack(e.to_list()), axis=0)))
             .rename("track_centroid")
         )
         df_movie = df_movie.merge(centroids, on="track_id")
-        df_movie["track_centroid"] = df_movie["track_centroid"].apply(
-            lambda x: x.tolist()
-        )
+        df_movie["track_centroid"] = df_movie["track_centroid"].apply(lambda x: x.tolist())
 
         df_movie.to_parquet(expected_parquet_path, index=False)
-        print(
-            f"✅ Đã lưu {len(movie_rows)} embeddings cho phim '{movie_name}' tại: {expected_parquet_path}"
-        )
+        print(f"✅ Đã lưu {len(movie_rows)} embeddings cho phim '{movie_name}' tại: {expected_parquet_path}")
 
         all_metadata[movie_name]["num_faces_detected"] = len(movie_rows)
         all_metadata[movie_name]["embedding_file_path"] = expected_parquet_path
 
+    # Ghi log chất lượng track (toàn cục)
     if quality_logs:
         os.makedirs("logs", exist_ok=True)
         pd.DataFrame(quality_logs).to_csv("logs/track_quality.csv", index=False)
         print("[INFO] Saved track quality log -> logs/track_quality.csv")
 
+    # Cập nhật metadata nếu có thay đổi
     if new_data_generated:
         with open(metadata_filepath, "w", encoding="utf-8") as f:
             json.dump(all_metadata, f, indent=4, ensure_ascii=False)

@@ -1,490 +1,243 @@
-"""Utilities for recognizing faces using a configured face index."""
-
+# services/recognition.py
 from __future__ import annotations
 
-import logging
+import json
 import math
-from typing import Any, Dict, List
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
-from utils.config_loader import (
-    get_highlight_settings,
-    get_recognition_settings,
-    load_config,
-)
+from utils.config_loader import load_config, get_recognition_settings
 from utils.search_actor import search_actor
-from utils.highlights import normalise_highlights
+
+# --- optional (nếu có) để “đá” rebuild index & in stats ---
+try:
+    from utils.indexer import build_character_index  # type: ignore
+except Exception:
+    build_character_index = None  # type: ignore
+
+DEBUG = os.getenv("FS_DEBUG", "1") != "0"  # bật debug mặc định
 
 
-
-LOGGER = logging.getLogger(__name__)
-
-
-
-_HIGHLIGHT_SETTINGS = get_highlight_settings()
-_HIGHLIGHT_LIMIT = _HIGHLIGHT_SETTINGS["TOP_K_HL_PER_SCENE"]
-_MERGE_GAP = float(_HIGHLIGHT_SETTINGS["MERGE_GAP_SEC"])
-
-
-def _as_float(value: Any, default: float = 0.0) -> float:
-    """Safely cast ``value`` to ``float`` while providing a fallback."""
-
+def _as_float(x: Any, default: float = 0.0) -> float:
     try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+        v = float(x)
+        if math.isfinite(v):
+            return v
+    except Exception:
+        pass
+    return float(default)
 
 
-def _as_int(value: Any, default: int = 0) -> int:
-    """Safely cast ``value`` to ``int`` while providing a fallback."""
-
+def _as_int(x: Any, default: int = 0) -> int:
     try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+        return int(x)
+    except Exception:
+        return int(default)
 
 
-def _maybe_float(value: Any) -> float | None:
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(result):
-        return None
-    return float(result)
-
-
-def _normalise_character_id(value: Any) -> str | None:
-    """Convert a character identifier to string form when possible."""
-
-    if value is None or value != value:  # guard against ``None`` and ``NaN``
+def _load_json_file(path: str) -> Any:
+    if not path or not os.path.exists(path):
         return None
     try:
-        return str(value)
-    except Exception:  # pragma: no cover - defensive
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
         return None
 
 
-def _find_competing_candidate(
-    candidates: List[Dict[str, Any]], best_candidate: Dict[str, Any]
-) -> Dict[str, Any] | None:
-    """Return the strongest competitor for ``best_candidate`` in ``candidates``."""
-
-    best_id = _normalise_character_id(best_candidate.get("character_id"))
-
-    for candidate in candidates[1:]:
-        if not isinstance(candidate, dict):
-            continue
-        candidate_id = _normalise_character_id(candidate.get("character_id"))
-        if best_id is not None and candidate_id == best_id:
-            continue
-        return candidate
-
-    return None
+@dataclass
+class MovieMeta:
+    title: str
+    fps: Optional[float] = None
+    duration_seconds: Optional[float] = None
+    total_frames: Optional[int] = None
+    video_path: Optional[str] = None
 
 
-def _has_confident_lead(
-    best_score: float,
-    competitor_score: float,
-    *,
-    is_similarity_index: bool,
-    margin_threshold: float,
-    ratio_threshold: float,
-) -> bool:
-    """Determine whether the best score clearly outperforms the competitor."""
-
-    margin_ok = True
-    ratio_ok = True
-
-    if margin_threshold > 0:
-        diff = (
-            best_score - competitor_score
-            if is_similarity_index
-            else competitor_score - best_score
-        )
-        margin_ok = diff >= margin_threshold
-
-    if ratio_threshold > 0:
-        if is_similarity_index:
-            if competitor_score <= 0:
-                ratio_ok = True
-            else:
-                ratio_ok = best_score / max(competitor_score, 1e-12) >= ratio_threshold
-        else:
-            ratio_ok = competitor_score / max(best_score, 1e-12) >= ratio_threshold
-
-    return margin_ok or ratio_ok
+def _read_metadata(cfg: dict) -> Dict[str, Any]:
+    storage = cfg.get("storage", {}) if isinstance(cfg, dict) else {}
+    meta_path = storage.get("metadata_json") or "Data/metadata.json"
+    return _load_json_file(meta_path) or {}
 
 
-
-def _normalize_scene(scene: Any, *, highlight_limit: int | None = None) -> Dict[str, Any] | None:
-    """Return a defensive copy of the provided scene metadata."""
-
-    if scene is None:
-        return None
-    if isinstance(scene, dict):
-        scene_copy = dict(scene)
-
-
-        timeline = scene_copy.get("timeline")
-        if isinstance(timeline, list):
-            scene_copy["timeline"] = [
-                dict(entry) if isinstance(entry, dict) else entry
-                for entry in timeline
-            ]
-
-        scene_start = (
-            _maybe_float(scene_copy.get("video_start_timestamp"))
-            or _maybe_float(scene_copy.get("start_time"))
-            or _maybe_float(scene_copy.get("clip_start_timestamp"))
-        )
-        scene_end = (
-            _maybe_float(scene_copy.get("video_end_timestamp"))
-            or _maybe_float(scene_copy.get("end_time"))
-            or _maybe_float(scene_copy.get("clip_end_timestamp"))
-        )
-
-        highlights = normalise_highlights(
-            scene_copy.get("highlights"),
-            highlight_limit=highlight_limit,
-            merge_gap=_MERGE_GAP,
-            scene_start=scene_start,
-            scene_end=scene_end,
-            logger=LOGGER,
-            scene_identifier={
-                "scene_index": scene_copy.get("scene_index"),
-                "movie": scene_copy.get("movie"),
-            },
-        )
-
-        scene_copy["highlights"] = highlights
-        scene_copy["highlight_total"] = len(highlights)
-        scene_copy["highlight_merge_gap"] = _MERGE_GAP
-        scene_copy.setdefault("highlight_index", 0 if highlights else None)
-
-
-        return scene_copy
-
-    if isinstance(scene, str):
-        return {
-            "frame": scene,
-            "highlights": [],
-            "highlight_total": 0,
-            "highlight_index": None,
-            "highlight_merge_gap": _MERGE_GAP,
-        }
-    return None
-
-def _build_scene_variants(
-    raw_scenes: Any, *, movie: Any | None = None
-) -> List[Dict[str, Any]]:
-    """Expand raw scenes into cursorable highlight variants."""
-
-    variants: List[Dict[str, Any]] = []
-    fallback_variants: List[Dict[str, Any]] = []
-
-    if isinstance(raw_scenes, list):
-        for idx, scene in enumerate(raw_scenes):
-            normalized = _normalize_scene(scene, highlight_limit=_HIGHLIGHT_LIMIT)
-            if not isinstance(normalized, dict):
-                continue
-
-            raw_scene_index = normalized.get("scene_index")
+def _reverse_movie_id_map(meta: Dict[str, Any]) -> Dict[str, str]:
+    rev: Dict[str, str] = {}
+    gen = meta.get("_generated") or {}
+    id_map = gen.get("movie_id_map") or {}
+    if isinstance(id_map, dict):
+        for title, mid in id_map.items():
             try:
-                source_scene_index = int(raw_scene_index)
-            except (TypeError, ValueError):
-                source_scene_index = idx
-
-            normalized["source_scene_index"] = source_scene_index
-
-            highlights = normalized.get("highlights")
-            if not isinstance(highlights, list):
-                highlights = []
-                normalized["highlights"] = highlights
-
-            highlight_total = len(highlights)
-
-            try:
-                LOGGER.debug(
-                    "DEBUG_HL recognition scene prepared",
-                    extra={
-                        "scene": source_scene_index,
-                        "highlight_total": highlight_total,
-                        "movie": movie,
-                    },
-                )
-            except Exception:  # pragma: no cover - defensive logging
+                rev[str(int(mid))] = str(title)
+            except Exception:
                 pass
-
-            if highlight_total:
-                for highlight_index in range(highlight_total):
-                    scene_copy = dict(normalized)
-                    scene_copy["highlight_index"] = highlight_index
-                    scene_copy["highlight_total"] = highlight_total
-                    scene_copy["scene_index"] = len(variants)
-                    scene_copy["source_scene_index"] = source_scene_index
-                    highlight = highlights[highlight_index]
-                    if isinstance(highlight, dict):
-                        start = _maybe_float(highlight.get("start"))
-                        end = _maybe_float(highlight.get("end"))
-                        duration = _maybe_float(highlight.get("duration"))
-                        if start is not None:
-                            scene_copy["start_time"] = start
-                            scene_copy["video_start_timestamp"] = start
-                            scene_copy["clip_start_timestamp"] = start
-                        if end is not None:
-                            scene_copy["end_time"] = end
-                            scene_copy["video_end_timestamp"] = end
-                            scene_copy["clip_end_timestamp"] = end
-                        if duration is not None:
-                            scene_copy["duration"] = duration
-                    variants.append(scene_copy)
-            else:
-                fallback_scene = dict(normalized)
-                fallback_scene["highlight_index"] = None
-                fallback_scene["highlight_total"] = 0
-                fallback_scene["scene_index"] = len(fallback_variants)
-                fallback_scene["source_scene_index"] = source_scene_index
-                fallback_variants.append(fallback_scene)
-
-    return variants if variants else fallback_variants
+    return rev
 
 
+def _title_from_any(meta: Dict[str, Any], movie_key: Any) -> Optional[str]:
+    s = str(movie_key).strip()
+    if not s:
+        return None
+    if s in meta and s != "_generated":
+        return s
+    return _reverse_movie_id_map(meta).get(s)
 
 
-PRESENT_LABEL_VI = "Xuất hiện trong phim"
-NEAR_MATCH_LABEL_VI = "Có nhân vật gần giống"
+def _movie_meta(meta: Dict[str, Any], movie_key: Any) -> Optional[MovieMeta]:
+    title = _title_from_any(meta, movie_key)
+    if not title:
+        return None
+    info = meta.get(title) or {}
+    return MovieMeta(
+        title=title,
+        fps=info.get("fps"),
+        duration_seconds=info.get("duration_seconds"),
+        total_frames=info.get("total_frames"),
+        video_path=info.get("video_path"),
+    )
 
 
-def recognize(image_path: str, top_k: int | None = None) -> Dict[str, Any]:
-    """Recognize a face image using the configured index.
+def _ensure_scenes(char_entry: Dict[str, Any], max_scenes: int = 8) -> None:
+    sc = char_entry.get("scenes")
+    if isinstance(sc, list) and sc:
+        char_entry["scenes"] = sc[:max_scenes]
 
-    The return payload is organised per movie and contains metadata required by
-    the API layer to expose preview images and scene navigation. Matches are
-    separated into "present" (>= ``present_threshold``) and "near_match"
-    (between ``near_match_threshold`` and ``present_threshold``) buckets; the
-    API returns only the "present" bucket when available and otherwise falls
-    back to the "near_match" bucket.
-    """
 
+def recognize(image_path: str, top_k: Optional[int] = None) -> Dict[str, Any]:
     cfg = load_config()
-    search_cfg = cfg.get("search", {})
-    index_cfg = cfg.get("index", {}) if isinstance(cfg, dict) else {}
-    index_type = str(index_cfg.get("type", "")).lower()
-    metric_hint = str(index_cfg.get("metric", "")).lower()
-    if not index_type and metric_hint:
-        index_type = metric_hint
-    is_similarity_index = "ip" in index_type or "cos" in index_type
+    meta_all = _read_metadata(cfg)
+
+    search_cfg = cfg.get("search", {}) if isinstance(cfg, dict) else {}
     recognition_cfg = get_recognition_settings(cfg)
-    present_threshold = _as_float(
-        search_cfg.get("present_threshold", search_cfg.get("threshold", 0.5)), 0.5
-    )
-    near_match_threshold = _as_float(recognition_cfg.get("SIM_THRESHOLD"), 0.3)
-    min_score_cfg = _as_float(
-        search_cfg.get("min_score", near_match_threshold), near_match_threshold
-    )
+
+    present_threshold = _as_float(search_cfg.get("present_threshold", 0.5), 0.5)
+    near_match_threshold = _as_float(recognition_cfg.get("SIM_THRESHOLD", 0.3), 0.3)
+    near_match_threshold = min(near_match_threshold, present_threshold)
+    # để chắc chắn không “lọc chết”:
+    min_score = _as_float(search_cfg.get("min_score", 0.0), 0.0)
+
     margin_threshold = _as_float(search_cfg.get("margin_threshold", 0.05), 0.05)
     ratio_threshold = _as_float(search_cfg.get("ratio_threshold", 1.1), 1.1)
-    if is_similarity_index:
-        min_score = min_score_cfg
-    else:
-        near_match_threshold = max(near_match_threshold, present_threshold)
-        min_score = max(min_score_cfg, near_match_threshold)
 
-    max_results_cfg = _as_int(
-        search_cfg.get("max_results", search_cfg.get("top_k", 50)), 50
-    )
+    max_results_cfg = _as_int(search_cfg.get("max_results", search_cfg.get("top_k", 200)), 200)
     if top_k is not None:
-        max_results_cfg = max(max_results_cfg, _as_int(top_k, max_results_cfg))
+        max_results_cfg = max(max_results_cfg, int(top_k))
 
-    matches_by_movie = search_actor(
-        image_path,
-        k=max_results_cfg,
-        score_floor=min_score,
-        max_results=max_results_cfg,
-    )
+    def _run_search() -> Dict[str, List[Dict[str, Any]]]:
+        try:
+            payload = search_actor(
+                image_path,
+                max_results=max_results_cfg,
+                score_floor=min_score,  # 0.0
+            )
+        except TypeError:
+            payload = search_actor(image_path, max_results_cfg)
+        if isinstance(payload, dict) and "results" in payload:
+            return payload.get("results") or {}
+        return payload or {}
+
+    # 1) chạy search lần 1 (không lọc)
+    matches_by_movie = _run_search()
+
+    if DEBUG:
+        total = sum(len(v or []) for v in matches_by_movie.values())
+        best = 0.0
+        for lst in matches_by_movie.values():
+            for it in (lst or []):
+                best = max(best, _as_float(it.get("distance"), 0.0))
+        print(f"[Recognize][RAW] movies={len(matches_by_movie)} total={total} best_score={best:.4f}")
+
+    # 2) nếu rỗng → thử build index (1 lần) rồi chạy lại
+    if not matches_by_movie and build_character_index:
+        try:
+            build_character_index()
+            matches_by_movie = _run_search()
+            if DEBUG:
+                total = sum(len(v or []) for v in matches_by_movie.values())
+                print(f"[Recognize][RETRY after build] total={total}")
+        except Exception as e:
+            if DEBUG:
+                print(f"[Recognize][RETRY build failed] {e}")
+
     if not matches_by_movie:
-        return {"is_unknown": True, "movies": []}
+        if DEBUG:
+            print("[Recognize] No candidates returned from search_actor.")
+        return {
+            "is_unknown": True,
+            "movies": [],
+            "thresholds": {
+                "present_threshold": present_threshold,
+                "near_match_threshold": near_match_threshold,
+                "margin_threshold": margin_threshold,
+                "ratio_threshold": ratio_threshold,
+                "min_score": min_score,
+            },
+        }
 
-    best_score: float | None = None
-    movies_by_status: Dict[str, Dict[str, Any]] = {"present": {}, "near_match": {}}
+    # 3) gom & lọc theo ngưỡng trình bày
+    output_movies: List[Dict[str, Any]] = []
 
-    for movie_id, candidates in matches_by_movie.items():
+    for movie_key, candidates in matches_by_movie.items():
         if not isinstance(candidates, list) or not candidates:
             continue
-
-        candidates = [c for c in candidates if isinstance(c, dict)]
-        if not candidates:
+        cand_list = [c for c in candidates if isinstance(c, dict)]
+        if not cand_list:
             continue
 
-        default_score = float("-inf") if is_similarity_index else float("inf")
-        candidates.sort(
-            key=lambda item: _as_float(item.get("distance"), default_score),
-            reverse=is_similarity_index,
-        )
+        cand_list.sort(key=lambda it: _as_float(it.get("distance"), 0.0), reverse=True)
 
+        mmeta = _movie_meta(meta_all, movie_key)
+        mtitle = mmeta.title if mmeta else str(movie_key)
 
-        seen_character_ids: set[str] | None = None
-        best_candidate = candidates[0]
-        competitor = _find_competing_candidate(candidates, best_candidate)
-        if competitor is not None:
-            best_candidate_score = _as_float(best_candidate.get("distance"), 0.0)
-            competitor_score = _as_float(competitor.get("distance"), 0.0)
-            if not _has_confident_lead(
-                best_candidate_score,
-                competitor_score,
-                is_similarity_index=is_similarity_index,
-                margin_threshold=margin_threshold,
-                ratio_threshold=ratio_threshold,
-            ):
+        kept_chars: List[Dict[str, Any]] = []
+        for c in cand_list:
+            s = _as_float(c.get("distance"), 0.0)
+            # chỉ áp ngưỡng “near” để hiển thị
+            if s < near_match_threshold:
                 continue
-
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-
-            score = _as_float(candidate.get("distance"), 0.0)
-            if is_similarity_index:
-                if score < near_match_threshold:
-                    continue
-                status = "present" if score >= present_threshold else "near_match"
-            else:
-                if score > near_match_threshold:
-                    continue
-                status = "present" if score <= present_threshold else "near_match"
-            label = PRESENT_LABEL_VI if status == "present" else NEAR_MATCH_LABEL_VI
-
-            movie_key = str(movie_id)
-            movie_entry = movies_by_status[status].setdefault(
-                movie_key,
-                {
-                    "movie_id": movie_key,
-                    "movie": candidate.get("movie"),
-                    "characters": [],
-                    "match_status": status,
-                    "match_label": label,
-                },
-            )
-            current_seen = movie_entry.setdefault("_seen_character_ids", set())
-            if not isinstance(current_seen, set):
-                current_seen = set()
-                movie_entry["_seen_character_ids"] = current_seen
-            seen_character_ids = current_seen
-            if not movie_entry.get("movie") and candidate.get("movie"):
-                movie_entry["movie"] = candidate.get("movie")
-
-            scenes = candidate.get("scenes")
-            scene_variants = _build_scene_variants(
-                scenes, movie=candidate.get("movie")
-            )
-
-            if scene_variants:
-                total_scenes = len(scene_variants)
-                first_scene = dict(scene_variants[0])
-                next_cursor = 1 if total_scenes > 1 else None
-            else:
-                total_scenes = len(scenes) if isinstance(scenes, list) else 0
-                first_scene = (
-                    _normalize_scene(scenes[0], highlight_limit=_HIGHLIGHT_LIMIT)
-                    if isinstance(scenes, list) and scenes
-                    else None
-                )
-                next_cursor = (
-                    1 if isinstance(scenes, list) and len(scenes) > 1 else None
-                )
-
-            formatted_character = {
-                "movie_id": movie_key,
-                "movie": candidate.get("movie"),
-                "character_id": str(candidate.get("character_id", "")),
-                "score": score,
-                "distance": score,
-                "count": _as_int(candidate.get("count")),
-                "track_count": _as_int(
-                    candidate.get("track_count"),
-                    _as_int(candidate.get("count")),
-                ),
-                "rep_image": candidate.get("rep_image"),
-                "previews": candidate.get("previews") or [],
-                "preview_paths": candidate.get("preview_paths") or [],
-                "raw_cluster_ids": candidate.get("raw_cluster_ids") or [],
-                "movies": candidate.get("movies") or [],
-                "scene": first_scene,
-                "scene_index": 0 if first_scene is not None else None,
-                "scene_cursor": next_cursor,
-                "next_scene_cursor": next_cursor,
-                "total_scenes": total_scenes,
-                "has_more_scenes": next_cursor is not None,
-                "match_status": status,
-                "match_label": label,
+            ent = {
+                "character_id": str(c.get("character_id")),
+                "score": s,
+                "rep_image": c.get("rep_image"),
+                "preview_paths": c.get("preview_paths") or [],
+                "scenes": c.get("scenes") or [],
+                "match_status": "present" if s >= present_threshold else "near_match",
+                "match_label": "Xuất hiện" if s >= present_threshold else "Gần giống",
             }
+            _ensure_scenes(ent, max_scenes=_as_int(search_cfg.get("max_scenes", 8), 8))
+            kept_chars.append(ent)
 
-            if scene_variants:
-                formatted_character["scenes"] = [dict(scene) for scene in scene_variants]
-            if isinstance(first_scene, dict):
-                formatted_character["highlight_total"] = first_scene.get(
-                    "highlight_total", len(scene_variants)
-                )
-            else:
-                formatted_character["highlight_total"] = len(scene_variants)
-
-
-            character_id = formatted_character["character_id"]
-            if character_id and seen_character_ids is not None:
-                if character_id in seen_character_ids:
-                    continue
-                seen_character_ids.add(character_id)
-            if character_id:
-                movie_entry["characters"].append(formatted_character)
-                if best_score is None:
-                    best_score = score
-                elif is_similarity_index:
-                    best_score = max(best_score, score)
-                else:
-                    best_score = min(best_score, score)
-
-    selected_status = "present" if movies_by_status["present"] else "near_match"
-    selected_movies_map = movies_by_status[selected_status]
-
-    if not selected_movies_map:
-        return {"is_unknown": True, "movies": []}
-
-    movies: List[Dict[str, Any]] = []
-    for movie_entry in selected_movies_map.values():
-        movie_entry.pop("_seen_character_ids", None)
-        characters = movie_entry.get("characters", [])
-        if not characters:
+        if not kept_chars:
             continue
-        characters.sort(
-            key=lambda item: item.get("score", 0.0), reverse=is_similarity_index
-        )
-        movie_payload = {
-            "movie_id": movie_entry.get("movie_id"),
-            "movie": movie_entry.get("movie"),
-            "score": characters[0].get("score", 0.0),
-            "characters": characters,
-            "match_status": movie_entry.get("match_status"),
-            "match_label": movie_entry.get("match_label"),
-        }
-        movies.append(movie_payload)
 
-    if not movies:
-        return {"is_unknown": True, "movies": []}
+        output_movies.append({
+            "movie": mtitle,
+            "movie_id": str(movie_key),
+            "characters": kept_chars,
+        })
 
-    movies.sort(
-        key=lambda item: item.get("score", 0.0), reverse=is_similarity_index
-    )
+    # sort phim theo best score
+    def best_score(m: Dict[str, Any]) -> float:
+        return max([_as_float(c.get("score"), 0.0) for c in m.get("characters", [])] or [0.0])
 
-    if best_score is None:
-        return {"is_unknown": True, "movies": []}
+    output_movies.sort(key=best_score, reverse=True)
 
-    if is_similarity_index:
-        is_unknown = best_score < present_threshold
-    else:
-        is_unknown = best_score > present_threshold
+    if DEBUG:
+        if output_movies:
+            mx = best_score(output_movies[0])
+            print(f"[Recognize] Movies kept={len(output_movies)} top_best={mx:.4f}")
+        else:
+            print("[Recognize] After thresholding: no movies")
 
     return {
-        "is_unknown": is_unknown,
-        "best_score": best_score,
-        "is_similarity_index": is_similarity_index,
-        "movies": movies,
+        "is_unknown": len(output_movies) == 0,
+        "bucket": "present",
+        "movies": output_movies,
+        "thresholds": {
+            "present_threshold": present_threshold,
+            "near_match_threshold": near_match_threshold,
+            "margin_threshold": margin_threshold,
+            "ratio_threshold": ratio_threshold,
+            "min_score": min_score,
+        },
     }

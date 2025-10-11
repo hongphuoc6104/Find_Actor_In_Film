@@ -1,44 +1,61 @@
+# =========================
+# Face Search – CONFIG YAML (đồng bộ BE hiện tại)
+# =========================
+
 seed: 42
 
 storage:
-  video_root: "Data/video"
+  # Gốc dữ liệu
+  video_root: "Data/video"              # khóa đang dùng
+  videos_root: "Data/video"             # alias
   frames_root: "Data/frames"
-  metadata_json: "Data/metadata.json"
-  embeddings_folder_per_movie: "Data/embeddings"
   face_crops_root: "Data/face_crops"
 
+  # Metadata & kho
+  metadata_json: "Data/metadata.json"
+  embeddings_folder_per_movie: "Data/embeddings"
+
+  # Parquet thống nhất
   warehouse_embeddings: "warehouse/parquet/embeddings.parquet"
-  warehouse_embeddings_pca: "warehouse/parquet/embeddings_pca.parquet"
+  warehouse_embeddings_pca: "warehouse/parquet/embeddings_pca.parquet"   # để trống/không dùng nếu PCA tắt
   warehouse_clusters: "warehouse/parquet/clusters.parquet"
-  warehouse_noise: "warehouse/parquet/noise.parquet"
   clusters_merged_parquet: "warehouse/parquet/clusters_merged.parquet"
+  warehouse_noise: "warehouse/parquet/noise.parquet"
+
+  # Centroid 512D cho nhận diện
+  centroids_parquet: "warehouse/parquet/centroids.parquet"
+
+  # Previews & output phụ trợ
   cluster_previews_root: "warehouse/cluster_previews"
   scene_clips_root: "warehouse/scene_clips"
   cluster_tuning_report: "reports/cluster_tuning.csv"
 
+  # Manifest nhân vật
   characters_json: "warehouse/characters.json"
-  pca_model: "models/pca_model.joblib"
-  index_path: "models/character_index.faiss"
-  index_map: "models/character_index_map.json"
 
 embedding:
   model: "buffalo_l"
   l2_normalize: true
   providers: ["CUDAExecutionProvider", "CPUExecutionProvider"]
+  embedding_dim: 512
 
+# PCA giữ để tương thích, nhưng mặc định TẮT
 pca:
-  enable: true
+  enable: false
   n_components: 256
   whiten: false
 
+# -------------------------
+# Clustering (giữ cấu trúc hiện tại)
+# -------------------------
 clustering:
-  algo: "agglomerative"        # tạm bỏ auto/HDBSCAN cho ổn định
-  metric: "euclidean"          # tránh fallback khó kiểm soát
+  algo: "agglomerative"
+  metric: "euclidean"
   linkage: "complete"
   auto_distance_percentile: 95
   distance_threshold:
-    default: 0.43              # cho 256-D PCA + L2
-  distance_threshold_pca: 0.9
+    default: 0.43
+  distance_threshold_pca: 0.90
   hdbscan:
     use_precomputed: true
     min_cluster_size: 5
@@ -52,14 +69,20 @@ clustering:
     min_clusters: 2
     max_clusters: 120
     cluster_weight: 0.0
+
+# Alias cho code tham chiếu cluster.*
+cluster:
+  distance_threshold_pca: 0.90
+
 merge:
-  global_threshold: 0.78       # cosine similarity threshold for global merge
+  global_threshold: 0.78
+  within_movie_threshold: 0.72
 
 post_merge:
   enable: true
-  metric: "euclidean"          # thống nhất với trên
+  metric: "euclidean"
   linkage: "average"
-  distance_threshold: 0.55     # NGUYÊN NHÂN CHÍNH khiến còn 2–4 người
+  distance_threshold: 0.55
 
 filter:
   min_track_size: 5
@@ -67,8 +90,6 @@ filter:
 
 filter_clusters:
   min_size: 6
-#  min_det: 0.6
-#  min_frames: 5
 
 quality_filters:
   enable: true
@@ -86,28 +107,27 @@ centroid:
   method: "trimmed_mean"
   trim_ratio: 0.20
 
-index:
-  type: "flat_ip"
+# -------------------------
+# Preview (ảnh cụm)
+# -------------------------
+preview:
+  source: "frames"                      # nếu muốn lấy crops → "crops"
+  max_images_per_cluster: 24
+  min_face_size: 0
 
-  search:
-    knn: 1
-    noise_knn: 50
-    noise_cosine_floor: 0.45
-    sim_threshold: 0.5
-    margin_threshold: 0.05
-    ratio_threshold: 1.1
-    min_count: 3
+# (Không dùng index/FAISS cũ nữa – đã loại bỏ index_path/index_map)
 
 logging:
   mlflow_experiment: "face_discovery_mvp"
 
 search:
-  present_threshold: 0.5      # điểm >= giá trị này được xem là "Xuất hiện trong phim"
-  near_match_threshold: 0.3    # điểm từ giá trị này tới dưới present_threshold là "Có nhân vật gần giống"
-  min_score: 0.3               # ngưỡng thấp nhất để giữ kết quả khi truy vấn index (đảm bảo >=30%)
-  max_results: 120             # số lượng hàng xóm tối đa lấy từ index để bao phủ tất cả kết quả >= min_score
-  threshold: 0.45              # giữ lại cho tương thích cũ (ví dụ CLI)
-  top_k: 5                     # tùy chọn cũ; được dùng làm fallback nếu max_results không thiết lập
+  present_threshold: 0.5
+  near_match_threshold: 0.3
+  min_score: 0.25        # hạ một chút để dễ thấy kết quả
+  max_results: 120
+  threshold: 0.45
+  top_k: 50
+  max_scenes: 8
 
 highlight:
   MIN_HL_DURATION_SEC: 4.0
@@ -117,9 +137,53 @@ highlight:
   SIM_THRESHOLD: 0.65
 
 recognition:
-  SIM_THRESHOLD: 0.3
+  SIM_THRESHOLD: 0.25     # đồng bộ với search.min_score
 
 frontend:
   SEEK_PAD_SEC: 0.0
   PAUSE_TOLERANCE_SEC: 0.2
   MIN_VIEWABLE_SEC: 0.35
+
+tracklet:
+  max_age: 3
+  iou_threshold: 0.28
+
+# -------------------------
+# PROFILES
+# -------------------------
+profiles:
+  co_trang_dong_duc:
+    merge:   { within_movie_threshold: 0.84 }
+    cluster: { distance_threshold_pca: 0.91 }
+    filter_clusters: { min_size: 9 }
+    tracklet: { max_age: 4, iou_threshold: 0.24 }
+
+  hien_dai_tinh_cam:
+    merge:   { within_movie_threshold: 0.80 }
+    cluster: { distance_threshold_pca: 0.90 }
+    filter_clusters: { min_size: 7 }
+    tracklet: { max_age: 3, iou_threshold: 0.28 }
+
+  hanh_dong_rung_lac:
+    merge:   { within_movie_threshold: 0.86 }
+    cluster: { distance_threshold_pca: 0.93 }
+    filter_clusters: { min_size: 10 }
+    tracklet: { max_age: 5, iou_threshold: 0.20 }
+
+  xua_lang_que:
+    merge:   { within_movie_threshold: 0.82 }
+    cluster: { distance_threshold_pca: 0.90 }
+    filter_clusters: { min_size: 8 }
+    tracklet: { max_age: 3, iou_threshold: 0.26 }
+
+  kinh_di_toi:
+    merge:   { within_movie_threshold: 0.85 }
+    cluster: { distance_threshold_pca: 0.92 }
+    filter_clusters: { min_size: 9 }
+    tracklet: { max_age: 4, iou_threshold: 0.22 }
+
+  balanced:
+    merge:   { within_movie_threshold: 0.82 }
+    cluster: { distance_threshold_pca: 0.90 }
+    filter_clusters: { min_size: 8 }
+    tracklet: { max_age: 3, iou_threshold: 0.26 }
