@@ -1,10 +1,9 @@
 # services/recognition.py
 from __future__ import annotations
 import os
-import math  # Thêm import math
+import math
 from typing import Any, Dict, List, Optional
 
-# --- Các thành phần cốt lõi ---
 from utils.config_loader import load_config, get_recognition_settings
 from utils.indexer import build_character_index, search_by_embedding
 from utils.search_actor import _get_app, _read_image, _detect_best_face
@@ -12,57 +11,40 @@ from utils.search_actor import _get_app, _read_image, _detect_best_face
 DEBUG = os.getenv("FS_DEBUG", "1") != "0"
 
 
-# --- SỬA LỖI: Đưa các hàm helper vào đúng vị trí ---
 def _as_float(x: Any, default: float = 0.0) -> float:
-    """Chuyển đổi giá trị sang float một cách an toàn."""
     try:
         v = float(x)
-        if math.isfinite(v):
-            return v
+        return v if math.isfinite(v) else float(default)
     except (ValueError, TypeError, AttributeError):
-        pass
-    return float(default)
+        return float(default)
 
 
 def _as_int(x: Any, default: int = 0) -> int:
-    """Chuyển đổi giá trị sang int một cách an toàn."""
     try:
-        # Chuyển qua float trước để xử lý các chuỗi như "123.0"
         return int(float(x))
     except (ValueError, TypeError, AttributeError):
         return int(default)
 
 
-# --- Import các hàm còn lại từ scene_loader ---
-from .scene_loader import _read_metadata
-
-
-def _ensure_scenes(char_entry: Dict[str, Any], max_scenes: int = 8) -> None:
-    sc = char_entry.get("scenes")
-    if isinstance(sc, list) and sc:
-        char_entry["scenes"] = sc[:max_scenes]
-
-
 def recognize(image_path: str, top_k: Optional[int] = None) -> Dict[str, Any]:
     """
-    Hàm nhận diện chính, sử dụng indexer làm phương pháp tìm kiếm chính.
+    Hàm nhận diện chính, được nâng cấp với logic quyết định thông minh.
     """
     cfg = load_config()
     recognition_cfg = get_recognition_settings(cfg)
+    search_cfg = cfg.get("search", {})
 
-    # Tải các ngưỡng từ config
-    present_threshold = _as_float(recognition_cfg.get("present_threshold", 0.55), 0.55)
-    near_match_threshold = _as_float(recognition_cfg.get("SIM_THRESHOLD", 0.45), 0.45)
+    # Tải các ngưỡng quyết định từ config (vay mượn từ find_actor.py)
+    confident_threshold = _as_float(search_cfg.get("confident_threshold", 0.55), 0.55)
+    suggestion_threshold = _as_float(recognition_cfg.get("SIM_THRESHOLD", 0.45), 0.45)
+    margin_threshold = _as_float(search_cfg.get("margin_threshold", 0.1), 0.1)
 
-    # Đảm bảo index được xây dựng trước khi tìm kiếm
     try:
-        build_character_index(force_rebuild=False)
-    except (FileNotFoundError, ValueError) as e:
+        build_character_index()
+    except Exception as e:
         print(f"[Recognize][FATAL] Không thể xây dựng index: {e}")
         return {"is_unknown": True, "movies": [], "error": str(e)}
 
-    # Luồng xử lý mới
-    # 1. Trích xuất embedding từ ảnh truy vấn
     app = _get_app()
     query_image = _read_image(image_path)
     if query_image is None:
@@ -70,27 +52,18 @@ def recognize(image_path: str, top_k: Optional[int] = None) -> Dict[str, Any]:
 
     query_embedding = _detect_best_face(app, query_image)
     if query_embedding is None:
-        if DEBUG: print("[Recognize] Không tìm thấy khuôn mặt trong ảnh truy vấn.")
         return {"is_unknown": True, "movies": [], "error": "Không tìm thấy khuôn mặt."}
 
-    # 2. Thực hiện tìm kiếm bằng indexer
-    max_results = _as_int((cfg.get("search") or {}).get("max_results", 20), 20)
-    if top_k: max_results = max(max_results, int(top_k))
-
+    max_results = _as_int(search_cfg.get("max_results", 20), 20)
     raw_matches = search_by_embedding(
         query_vec=query_embedding,
         top_k=max_results,
-        min_score=near_match_threshold,  # Lọc sơ bộ ở bước tìm kiếm
+        min_score=suggestion_threshold,
     )
-
-    if DEBUG:
-        best_score = raw_matches[0]['score'] if raw_matches else 0.0
-        print(f"[Recognize][RAW] Indexer trả về {len(raw_matches)} kết quả, best_score={best_score:.4f}")
 
     if not raw_matches:
         return {"is_unknown": True, "movies": []}
 
-    # 3. Gom nhóm kết quả theo phim và định dạng đầu ra
     matches_by_movie: Dict[str, List[Dict[str, Any]]] = {}
     for match in raw_matches:
         movie_title = match.get("movie", "Unknown Movie")
@@ -98,33 +71,40 @@ def recognize(image_path: str, top_k: Optional[int] = None) -> Dict[str, Any]:
 
     output_movies: List[Dict[str, Any]] = []
     for movie_title, candidates in matches_by_movie.items():
-        kept_chars: List[Dict[str, Any]] = []
-        for c in candidates:
-            score = _as_float(c.get("score"), 0.0)
+        if not candidates: continue
 
-            # Phân loại match_status
-            status = "present" if score >= present_threshold else "near_match"
-            label = "Xuất hiện" if status == "present" else "Gần giống"
+        # --- LOGIC QUYẾT ĐỊNH MỚI ---
+        top_1_score = _as_float(candidates[0].get("score"))
+        top_2_score = _as_float(candidates[1].get("score")) if len(candidates) > 1 else 0.0
 
-            ent = {
-                "character_id": str(c.get("character_id")),
-                "score": score,
-                "rep_image": c.get("rep_image"),
-                "preview_paths": c.get("preview_paths") or [],
-                "scenes": c.get("scenes") or [],
-                "match_status": status,
-                "match_label": label,
-            }
-            _ensure_scenes(ent, max_scenes=_as_int((cfg.get("search") or {}).get("max_scenes", 8), 8))
-            kept_chars.append(ent)
+        # Sắp xếp lại các cảnh theo thời gian bắt đầu
+        for cand in candidates:
+            if isinstance(cand.get("scenes"), list):
+                cand["scenes"].sort(key=lambda s: s.get("start_time", 0))
 
-        if kept_chars:
+        # Phân loại kết quả
+        final_characters = []
+        if top_1_score >= confident_threshold and (top_1_score - top_2_score) >= margin_threshold:
+            # Trường hợp 1: Rất chắc chắn - điểm cao và bỏ xa đối thủ
+            char = candidates[0]
+            char["match_status"] = "CONFIDENT"
+            char["match_label"] = "Khớp chính xác"
+            final_characters.append(char)
+        else:
+            # Trường hợp 2: Gợi ý - điểm trên ngưỡng nhưng không chắc chắn, hoặc có đối thủ bám sát
+            for char in candidates:
+                score = _as_float(char.get("score"))
+                if score >= suggestion_threshold:
+                    char["match_status"] = "SUGGESTION"
+                    char["match_label"] = "Gợi ý"
+                    final_characters.append(char)
+
+        if final_characters:
             output_movies.append({
                 "movie": movie_title,
-                "characters": kept_chars,
+                "characters": final_characters,
             })
 
-    # Sắp xếp phim theo điểm số cao nhất
     output_movies.sort(key=lambda m: max([c.get('score', 0.0) for c in m['characters']]), reverse=True)
 
     return {
