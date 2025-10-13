@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import json
 import uuid
+from enum import Enum  # <-- THÊM MỚI
 
 # Thêm thư mục gốc vào sys.path để có thể import các module khác
 sys.path.insert(0, os.getcwd())
@@ -17,9 +18,15 @@ from api.celery_worker import run_pipeline_task, redis_client
 
 # Import các service và công cụ khác
 from services.recognition import recognize
-from utils.config_loader import load_config
-# (Bạn có thể tạo một file api/helpers.py và chuyển các hàm helper này vào đó cho gọn)
+from utils.config_loader import load_config, deep_merge  # <-- THÊM MỚI deep_merge
 from services.scene_loader import _read_metadata
+
+
+# --- THÊM MỚI: Định nghĩa các lựa chọn cho người dùng ---
+class CharacterScope(str, Enum):
+    main_only = "main_only"
+    all = "all"
+
 
 # --- Khởi tạo ứng dụng FastAPI ---
 app = FastAPI(
@@ -40,15 +47,16 @@ app.mount("/static/previews", StaticFiles(directory="warehouse/cluster_previews"
 async def submit_job(
         video_file: UploadFile = File(...),
         movie_title: str = Form(...),
-        min_det_score: float = Form(None),  # Tham số tùy chọn
-        min_size: int = Form(None)  # Tham số tùy chọn
+        character_scope: CharacterScope = Form(CharacterScope.all,
+                                               description="Lựa chọn phạm vi nhân vật: 'main_only' (chỉ nhân vật chính) hoặc 'all' (tất cả)."),
+        # <-- THÊM MỚI
+        min_det_score: Optional[float] = Form(None, description="(Ghi đè) Độ nhạy phát hiện khuôn mặt."),  # <-- SỬA LẠI
+        min_size: Optional[int] = Form(None,
+                                       description="(Ghi đè) Ngưỡng tùy chỉnh cho min_size, sẽ ưu tiên hơn character_scope.")
+        # <-- SỬA LẠI
 ):
     """
     Tải lên một video và các thông số để bắt đầu một tác vụ xử lý (train).
-
-    - **movie_title**: Tên định danh cho video này (không có đuôi file).
-    - **min_det_score**: (Tùy chọn) Độ nhạy phát hiện khuôn mặt (0.0 -> 1.0).
-    - **min_size**: (Tùy chọn) Ngưỡng để xác định diễn viên chính.
     """
     video_dir = Path("Data/video")
     video_dir.mkdir(exist_ok=True)
@@ -56,9 +64,7 @@ async def submit_job(
     file_extension = Path(video_file.filename).suffix or ".mp4"
     final_video_path = video_dir / f"{movie_title}{file_extension}"
 
-    if final_video_path.exists():
-        print(f"Video '{movie_title}' đã tồn tại. Sẽ kiểm tra và chạy lại các bước cần thiết.")
-    else:
+    if not final_video_path.exists():
         with open(final_video_path, "wb") as buffer:
             buffer.write(await video_file.read())
         print(f"Đã lưu video mới: {final_video_path}")
@@ -74,6 +80,7 @@ async def submit_job(
     run_pipeline_task.delay(
         job_id=job_id,
         movie_title=movie_title,
+        character_scope=character_scope.value,  # <-- THÊM MỚI: Truyền lựa chọn vào worker
         user_params=user_params
     )
 
@@ -88,22 +95,16 @@ async def submit_job(
 
 @app.get("/api/v1/jobs/status/{job_id}", tags=["Training Jobs"])
 async def get_job_status(job_id: str):
-    """
-    Kiểm tra trạng thái của một tác vụ xử lý bằng Job ID.
-    """
+    # ... (Hàm này giữ nguyên) ...
     job_data = redis_client.hgetall(f"job:{job_id}")
     if not job_data:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job ID.")
-
-    return job_data
+    return {k: v.decode('utf-8') if isinstance(v, bytes) else v for k, v in job_data.items()}
 
 
 # ==========================================================
 # API ENDPOINTS CHO LUỒNG NHẬN DIỆN VÀ TRUY VẤN
 # ==========================================================
-
-# (Các endpoints khác như /recognize, /movies, /movies/{title}/characters, /videos/{title}
-#  sẽ được thêm vào đây. Chúng ta sẽ hoàn thiện chúng ở bước sau.)
 
 @app.get("/", include_in_schema=False)
 def read_root():

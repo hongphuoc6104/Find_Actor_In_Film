@@ -46,7 +46,7 @@ clustering:
     # giữa hai khuôn mặt để chúng được coi là thuộc cùng một cụm.
     # - TĂNG: Các cụm ban đầu sẽ lớn hơn, gộp được nhiều ảnh hơn nhưng có nguy cơ gộp nhầm (ảnh kém "sạch"). Ví dụ: 1.4
     # - GIẢM: Các cụm ban đầu sẽ nhỏ hơn, rất "sạch" nhưng dễ bị "xé nhỏ" (một người bị chia thành nhiều cụm). Ví dụ: 0.9
-    default: 1.15
+    default: 1.0
 
 # -------------------------
 # BƯỚC 2: GỘP ĐA GIAI ĐOẠN (MULTI-STAGE MERGE)
@@ -57,7 +57,7 @@ merge:
   # tối thiểu giữa hai cụm để gộp chúng lại. Giá trị từ 0 đến 1.
   # - TĂNG: Gộp chặt hơn, yêu cầu hai cụm phải rất giống nhau mới gộp. An toàn hơn nhưng có thể không gộp được các góc mặt khác nhau. Ví dụ: 0.75
   # - GIẢM: Gộp lỏng hơn, "dễ dãi" hơn, có thể gộp được các góc mặt khác nhau nhưng có nguy cơ gộp nhầm hai người. Ví dụ: 0.55
-  within_movie_threshold: 0.55
+  within_movie_threshold: 0.5
 
 # Giai đoạn 2: Hấp thụ Vệ tinh (Satellites)
 post_merge:
@@ -67,7 +67,7 @@ post_merge:
   # từ một cụm vệ tinh đến một cụm hạt nhân để nó được hấp thụ.
   # - TĂNG: Hấp thụ lỏng hơn, "dễ dãi" hơn. Một cụm vệ tinh có thể ở khá xa mà vẫn được gộp vào. Giúp gộp các góc mặt rất khác nhau nhưng có nguy cơ gộp nhầm. Ví dụ: 0.8
   # - GIẢM: Hấp thụ chặt hơn. Vệ tinh phải rất gần hạt nhân mới được gộp. An toàn hơn nhưng có thể bỏ sót các góc mặt khác nhau. Ví dụ: 0.6
-  distance_threshold: 0.70
+  distance_threshold: 0.65
 
 # -------------------------
 # BƯỚC 3: BỘ LỌC KẾT QUẢ
@@ -86,29 +86,20 @@ filter_clusters:
 quality_filters:
   enable: true
 
-  # MỤC ĐÍCH: Điểm tin cậy tối thiểu mà mô hình AI phải có khi phát hiện một khuôn mặt.
-  # - TĂNG: Yêu cầu AI phải "chắc chắn" hơn khi nói "đây là một khuôn mặt". Giúp loại bỏ các vật thể trông hơi giống mặt người. Ví dụ: 0.6
-  # - GIẢM: Cho phép AI phát hiện cả những khuôn mặt kém rõ ràng hơn. Ví dụ: 0.4
-  min_det_score: 0.8
+  #phát hiện khuôn mặt
+  min_det_score: 0.3
 
-  # MỤC ĐÍCH: Độ nét tối thiểu của ảnh khuôn mặt.
-  # - TĂNG: Chỉ lấy những ảnh sắc nét. Ví dụ: 80.0
-  # - GIẢM: Chấp nhận cả những ảnh hơi mờ. Ví dụ: 50.0
-  min_blur_clarity: 180.0
+  #độ nét tối thiểu
+  min_blur_clarity: 30.0
 
   # Cấu hình lọc đa tầng
   landmark_quality_filter:
     enable: true
-    # MỤC ĐÍCH: "Điểm sàn" chất lượng TUYỆT ĐỐI. Bất kỳ khuôn mặt nào có điểm chất lượng dưới ngưỡng này
-    # sẽ bị vứt đi ngay lập tức. Dùng để loại bỏ "rác" (tai, gáy, ảnh che gần hết).
-    # - TĂNG: Lọc "rác" mạnh tay hơn, nhưng có thể loại bỏ nhầm các ảnh bị che một phần. Ví dụ: 0.4
-    # - GIẢM: "Dễ dãi" hơn với "rác", cho phép nhiều ảnh chất lượng thấp đi vào vòng trong. Ví dụ: 0.2
-    min_score_hard_cutoff: 0.8
+    # đếm các bộ phận của khuôn mặt
+    min_score_hard_cutoff: 0.4
 
-    # MỤC ĐÍCH: "Điểm sàn" để một ảnh được coi là "CHẤT LƯỢNG CAO". Chỉ những ảnh trên ngưỡng này
-    # mới được đếm vào `min_size` khi chọn "Hạt nhân".
-    # - TĂNG: Yêu cầu một ảnh phải rất đẹp (gần chính diện, rõ nét) mới được coi là bằng chứng vững chắc để xây dựng "Hạt nhân". Ví dụ: 0.7
-    # - GIẢM: Chấp nhận cả những ảnh hơi nghiêng, chất lượng khá cũng được tính là "chất lượng cao". Ví dụ: 0.5
+#   thông số này kết hợp với min_size để tạo ra được cụm bao nhiêu hình
+#   và mỗi hình bao nhiêu điểm trở lên sẽ được coi là cụm sạch cuối cùng.
     min_score_for_core: 0.85
 
 # =====================================================================
@@ -124,6 +115,7 @@ filter:
 tracklet:
   max_age: 3
   iou_threshold: 0.28
+
 profiles:
   balanced: {}
 
