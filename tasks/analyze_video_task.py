@@ -16,19 +16,25 @@ from utils.image_utils import calculate_blur_score
 from tasks.ingestion_task import count_faces_retina
 
 # =====================================================================
-# CÁC NGƯỠNG PHÂN TÍCH - CÓ THỂ TINH CHỈNH TẠI ĐÂY
+# [TUNING] CÁC NGƯỠNG PHÂN TÍCH ĐÃ ĐƯỢC TINH CHỈNH
 # =====================================================================
 ANALYSIS_THRESHOLDS = {
-    # Phân loại độ sáng (giá trị pixel trung bình của ảnh xám, 0-255)
-    "LIGHTING_DARK": 75,  # Dưới ngưỡng này => "Tối"
-    "LIGHTING_BRIGHT": 160,  # Trên ngưỡng này => "Sáng", ở giữa => "Trung bình"
+    # 1. Ánh sáng (0-255):
+    # - Phim kinh dị/hành động đêm thường < 70
+    # - Sitcom/Talkshow studio thường > 130
+    "LIGHTING_DARK": 80,      # Đã nâng nhẹ ngưỡng để bắt được nhiều phim "hơi tối"
+    "LIGHTING_BRIGHT": 140,   # Giảm nhẹ để dễ rơi vào nhóm Bright (studio)
 
-    # Phân loại độ nét (điểm Variance of Laplacian)
-    "CLARITY_BLURRY": 180,  # Dưới ngưỡng này => "Mờ" (do rung lắc, out-focus)
-    "CLARITY_SHARP": 380,  # Trên ngưỡng này => "Nét", ở giữa => "Trung bình"
+    # 2. Độ nét (Variance of Laplacian):
+    # - Action cam rung lắc mạnh thường < 150
+    # - Phim 4K tĩnh, phỏng vấn thường > 300
+    "CLARITY_BLURRY": 150,    # Ngưỡng mờ do chuyển động (motion blur)
+    "CLARITY_SHARP": 400,     # Ngưỡng cực nét (thường là quay cận mặt tĩnh)
 
-    # Phân loại độ phức tạp (số khuôn mặt trung bình trên mỗi frame)
-    "COMPLEXITY_CROWDED": 2.5  # Từ ngưỡng này trở lên => "Đông đúc"
+    # 3. Độ phức tạp (Số mặt trung bình/frame):
+    # - Phim tâm lý 2 người nói chuyện ~ 1.0 - 1.5
+    # - Phim chiến tranh/hành động > 2.5
+    "COMPLEXITY_CROWDED": 2.2 # Giảm ngưỡng xuống để thắt chặt tiêu chuẩn cho phim đông người
 }
 
 
@@ -67,9 +73,6 @@ def analyze_video_task(movie_title: str) -> Dict[str, str]:
     else:
         sample_size = min(max(int(n_extracted_frames * 0.05), 150), 250)
 
-    # --- CẬP NHẬT: Thay thế lấy mẫu ngẫu nhiên bằng lấy mẫu có hệ thống ---
-    # Logic cũ: sample_paths = random.sample(all_frame_paths, sample_size)
-
     if sample_size <= 0:
         sample_paths = []
     else:
@@ -79,7 +82,6 @@ def analyze_video_task(movie_title: str) -> Dict[str, str]:
         sample_paths = all_frame_paths[::step]
 
     print(f"[Analyze] Tổng số frames: {n_extracted_frames}. Lấy {len(sample_paths)} frames theo hệ thống để phân tích.")
-    # --- KẾT THÚC CẬP NHẬT ---
 
     # --- 3. Phân tích các frame mẫu (Không thay đổi) ---
     brightness_scores, blur_scores, face_counts = [], [], []
@@ -103,10 +105,13 @@ def analyze_video_task(movie_title: str) -> Dict[str, str]:
         print("[Analyze] Cảnh báo: Không phân tích được frame nào. Trả về profile mặc định.")
         return {"duration": "Unknown", "lighting": "Unknown", "clarity": "Unknown", "complexity": "Unknown"}
 
-    # --- 4. Tổng hợp và Phân loại (Không thay đổi) ---
+    # --- 4. Tổng hợp và Phân loại (Logic giữ nguyên, chỉ phụ thuộc vào Thresholds ở trên) ---
     avg_brightness = np.mean(brightness_scores)
     avg_blur = np.mean(blur_scores)
     avg_faces = np.mean(face_counts)
+
+    # Thêm log chi tiết để debug xem phim rơi vào khoảng nào
+    print(f"[Analyze] Metrics Raw -> Brightness: {avg_brightness:.1f}, Blur: {avg_blur:.1f}, AvgFaces: {avg_faces:.2f}")
 
     if n_extracted_frames < 600:
         duration_cat = "Short"

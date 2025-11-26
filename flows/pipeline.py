@@ -23,6 +23,8 @@ from tasks.post_merge_task import post_merge_task
 from tasks.preview_clusters_task import preview_clusters_task
 from tasks.character_task import character_task
 from tasks.validation_task import validation_task
+# [Mới] Import task gán nhãn
+from tasks.assign_labels_task import assign_labels_task
 
 # Import utils
 from utils.config_loader import load_config, apply_preset, load_movie_metadata, deep_merge
@@ -37,7 +39,6 @@ def _print_active_config(profile_key: str, cfg: dict, movie: str):
     print(f"  Profile strategy: {profile_key}")
     print(f"\n   FINAL TUNING PARAMETERS (after auto-tuning):")
 
-    # Sử dụng .get() để lấy giá trị an toàn, tránh lỗi KeyError
     qf = cfg.get('quality_filters', {})
     lqf = qf.get('landmark_quality_filter', {})
     fc = cfg.get('filter_clusters', {})
@@ -45,6 +46,7 @@ def _print_active_config(profile_key: str, cfg: dict, movie: str):
     m = cfg.get('merge', {})
 
     print(f"    - quality_filters.min_det_score:     {qf.get('min_det_score')}")
+    print(f"    - quality_filters.min_face_size:     {qf.get('min_face_size')}")
     print(f"    - quality_filters.min_score_hard_cutoff: {lqf.get('min_score_hard_cutoff')}")
     print(f"    - filter_clusters.min_size:          {fc.get('min_size')}")
     print(f"    - clustering.distance_threshold:     {cl.get('default')}")
@@ -71,12 +73,10 @@ def face_clustering_pipeline(
     video_found = True
     if not skip_ingestion:
         _banner("Stage 1: Ingestion")
-        # --- CẬP NHẬT 1: Nhận tín hiệu trả về từ ingestion_task ---
         video_found = ingestion_task(movie=active_movie)
     else:
         print("[SKIP] Ingestion stage.\n")
 
-    # --- CẬP NHẬT 2: Dừng pipeline sớm nếu không tìm thấy video ---
     if not video_found:
         message = f"Video file for '{active_movie}' not found. Stopping pipeline."
         print(f"\n {message}")
@@ -102,13 +102,11 @@ def face_clustering_pipeline(
 
     if not skip_embedding:
         _banner("Stage 2: Embedding")
-        # --- CẬP NHẬT 3: Truyền cfg đã được tinh chỉnh vào task ---
         embedding_task(cfg=cfg)
     else:
         print("[SKIP] Embedding stage.\n")
 
     _banner("Stage 3: Build Warehouse")
-    # --- CẬP NHẬT 4: Nhận tín hiệu trả về và dừng sớm nếu cần ---
     warehouse_path, row_count = build_warehouse_task()
     if row_count == 0:
         message = f"No data processed for movie '{active_movie}'. Stopping pipeline."
@@ -117,26 +115,30 @@ def face_clustering_pipeline(
         return {"status": "SKIPPED", "message": message}
 
     _banner("Stage 4: Clustering");
-    cluster_task()
+    cluster_task(cfg=cfg)
     _banner("Stage 5: Merge Clusters");
     merge_clusters_task(sim_threshold=cfg.get("merge", {}).get("within_movie_threshold"))
+
     _banner("Stage 6: Filter Clusters");
     core_clusters_df = filter_clusters_task(clusters=None, cfg=cfg, movie=active_movie)
+
     _banner("Stage 7: Post-Merge");
     all_merged_df = pd.read_parquet(cfg["storage"]["clusters_merged_parquet"]);
     final_clusters_df = post_merge_task(core_clusters_df=core_clusters_df, all_merged_clusters_df=all_merged_df,
                                         cfg=cfg)
+
     _banner("Stage 8: Preview Generation");
     previews_root = preview_clusters_task(filtered_clusters_df=final_clusters_df, cfg=cfg)
 
     _banner("Stage 9: Character Manifest")
-
     manifest_path = character_task(filtered_clusters_df=final_clusters_df, cfg=cfg)
 
+    # --- [Mới] Gán nhãn tự động ---
+    _banner("Stage 11: Auto Labeling")
+    assign_labels_task(cfg=cfg)
+
     _banner("Stage 10: Validation")
-
     reports = validation_task(cfg=cfg)
-
 
     try:
         metadata_filepath = base_cfg["storage"]["metadata_json"]
@@ -173,7 +175,6 @@ def main():
     try:
         face_clustering_pipeline(
             movie=args.movie,
-            # Xóa scope
             preset=args.preset,
             skip_ingestion=args.skip_ingestion,
             skip_embedding=args.skip_embedding

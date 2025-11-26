@@ -1,5 +1,5 @@
 # =========================
-# Face Search – CONFIG YAML
+# Face Search – CONFIG YAML (TUNED VERSION + LABELING)
 # =========================
 seed: 42
 
@@ -19,6 +19,9 @@ storage:
   cluster_previews_root: "warehouse/cluster_previews"
   characters_json: "warehouse/characters.json"
 
+  # Thư mục chứa ảnh mẫu để gán nhãn thủ công
+  labeled_faces_root: "warehouse/labeled_faces"
+
 # -------------------------
 # CẤU HÌNH NHẬN DIỆN (EMBEDDING)
 # -------------------------
@@ -32,82 +35,59 @@ pca:
 
 # =====================================================================
 # CÁC THAM SỐ MẶC ĐỊNH (Baseline)
-# Dùng cho video "bình thường": chất lượng khá, ánh sáng tốt.
 # =====================================================================
 clustering:
   algo: "agglomerative"
   metric: "euclidean"
   linkage: "complete"
   distance_threshold:
-    # MỤC ĐÍCH: Kiểm soát độ "chặt" của các cụm ban đầu. Đây là khoảng cách tối đa (Euclidean)
-    # giữa hai khuôn mặt để chúng được coi là thuộc cùng một cụm.
-    # - TĂNG: Các cụm ban đầu sẽ lớn hơn, gộp được nhiều ảnh hơn nhưng có nguy cơ gộp nhầm (ảnh kém "sạch"). Ví dụ: 1.4
-    # - GIẢM: Các cụm ban đầu sẽ nhỏ hơn, rất "sạch" nhưng dễ bị "xé nhỏ" (một người bị chia thành nhiều cụm). Ví dụ: 0.9
-    default: 1.0
+    default: 0.95
 
-# -------------------------
-# BƯỚC 2: GỘP ĐA GIAI ĐOẠN (MULTI-STAGE MERGE)
-# -------------------------
-# Giai đoạn 1: Tạo Hạt nhân (Cores)
 merge:
-  # MỤC ĐÍCH: Ngưỡng gộp các cụm ban đầu để tạo "Hạt nhân". Đây là ngưỡng ĐỘ TƯƠNG ĐỒNG (similarity)
-  # tối thiểu giữa hai cụm để gộp chúng lại. Giá trị từ 0 đến 1.
-  # - TĂNG: Gộp chặt hơn, yêu cầu hai cụm phải rất giống nhau mới gộp. An toàn hơn nhưng có thể không gộp được các góc mặt khác nhau. Ví dụ: 0.75
-  # - GIẢM: Gộp lỏng hơn, "dễ dãi" hơn, có thể gộp được các góc mặt khác nhau nhưng có nguy cơ gộp nhầm hai người. Ví dụ: 0.55
-  within_movie_threshold: 0.45
+  within_movie_threshold: 0.65
 
-# Giai đoạn 2: Hấp thụ Vệ tinh (Satellites)
 post_merge:
   enable: true
   metric: "cosine"
-  # MỤC ĐÍCH: Ngưỡng "hấp thụ" các cụm Vệ tinh. Đây là KHOẢNG CÁCH tối đa (Cosine)
-  # từ một cụm vệ tinh đến một cụm hạt nhân để nó được hấp thụ.
-  # - TĂNG: Hấp thụ lỏng hơn, "dễ dãi" hơn. Một cụm vệ tinh có thể ở khá xa mà vẫn được gộp vào. Giúp gộp các góc mặt rất khác nhau nhưng có nguy cơ gộp nhầm. Ví dụ: 0.8
-  # - GIẢM: Hấp thụ chặt hơn. Vệ tinh phải rất gần hạt nhân mới được gộp. An toàn hơn nhưng có thể bỏ sót các góc mặt khác nhau. Ví dụ: 0.6
   distance_threshold: 0.7
 
-# -------------------------
-# BƯỚC 3: BỘ LỌC KẾT QUẢ
-# -------------------------
-# Lọc để chọn Hạt nhân
 filter_clusters:
-  # MỤC ĐÍCH: Yêu cầu tối thiểu về số lượng ảnh "CHẤT LƯỢNG CAO" mà một cụm phải có
-  # để được chọn làm "Hạt nhân".
-  # - TĂNG: Yêu cầu khắt khe hơn. Chỉ những nhân vật xuất hiện nhiều và rõ nét mới được chọn làm hạt nhân. Giúp loại bỏ diễn viên phụ. Ví dụ: 15
-  # - GIẢM: Yêu cầu lỏng hơn. Cho phép cả những diễn viên phụ (xuất hiện ít hơn) có cơ hội được chọn làm hạt nhân. Ví dụ: 7
-  min_size: 3
+  min_size: 5
 
-# -------------------------
-# BƯỚC 0: BỘ LỌC ĐẦU VÀO (QUALITY FILTERS)
-# -------------------------
 quality_filters:
   enable: true
-
-  #phát hiện khuôn mặt
-  min_det_score: 0.3
-
-  #độ nét tối thiểu
-  min_blur_clarity: 30.0
-
-  # Cấu hình lọc đa tầng
+  min_det_score: 0.45
+  min_blur_clarity: 40.0
+  min_face_size: 50
   landmark_quality_filter:
     enable: true
-    # đếm các bộ phận của khuôn mặt
-    min_score_hard_cutoff: 0.4
+    min_score_hard_cutoff: 0.3
+    min_score_for_core: 0.70
 
-#   thông số này kết hợp với min_size để tạo ra được cụm bao nhiêu hình
-#   và mỗi hình bao nhiêu điểm trở lên sẽ được coi là cụm sạch cuối cùng.
-    min_score_for_core: 0.75
+# Cấu hình tìm kiếm nhận diện (khi user upload ảnh để search)
+search:
+  confident_threshold: 0.65
+  margin_threshold: 0.08
+  max_results: 20
+
+# -------------------------
+# CẤU HÌNH GÁN NHÃN TỰ ĐỘNG (AUTO-LABELING)
+# -------------------------
+labeling:
+  enable: true
+  # Ngưỡng Similarity (Cosine) để chấp nhận gán nhãn
+  # Ví dụ: 0.55 nghĩa là cụm trong phim phải giống ảnh mẫu ít nhất 55%
+  similarity_threshold: 0.55
 
 # =====================================================================
-# CÁC CẤU HÌNH KHÁC (Ít khi cần chỉnh)
+# CÁC CẤU HÌNH KHÁC
 # =====================================================================
 preview:
   source: "frames"
-  max_images_per_cluster: 999
+  max_images_per_cluster: 24
 
 filter:
-  min_track_size: 100
+  min_track_size: 1
   min_cluster_size: 2
 
 tracklet:
@@ -115,106 +95,67 @@ tracklet:
   iou_threshold: 0.28
 
 # =====================================================================
-# --- BỘ NÃO TỰ ĐỘNG TINH CHỈNH  ---
-#  Nếu video có chất lượng đầu vào tệ (tối, mờ),
-# hãy khắt khe hơn về các tiêu chí khác (đặc biệt là kích thước)
-# để đảm bảo chỉ lấy những dữ liệu tốt nhất có thể.
+# --- BỘ NÃO TỰ ĐỘNG TINH CHỈNH ---
 # =====================================================================
 auto_tuning:
-  # --- CÁC QUY TẮC QUYẾT ĐỊNH MIN_SIZE ---
   min_size_rules:
-    # Ngưỡng min_size cơ bản dựa trên thời lượng phim
     duration_base:
       Short: 3
-      Medium: 7
+      Medium: 6
       Long: 10
-    # Hệ số điều chỉnh (nhân lên) khi phim được phân loại là đông đúc
-    # --- ĐẶT ĐÚNG VỊ TRÍ Ở ĐÂY ---
     complexity_adjustment:
       Crowded: 1.5
 
-  # --- QUY TẮC CHO BỘ LỌC SƠ TUYỂN ---
-  filter_rules:
-    duration_base:
-      Short:
-        min_track_size: 100
-        min_cluster_size: 3
-      Medium:
-        min_track_size: 100
-        min_cluster_size: 3
-      Long:
-        min_track_size: 6
-        min_cluster_size: 5
-
-  # --- CÁC QUY TẮC GHI ĐÈ THAM SỐ CHUNG ---
   rules:
-    # --- QUY TẮC 1: VIDEO TỐI ---
-    - conditions:
-        lighting: "Dark"
-      overrides:
-        quality_filters:
-          min_det_score: 0.45
-          min_face_size: 65
-          landmark_quality_filter:
-            min_score_for_core: 0.65
-
-    # --- QUY TẮC 2: VIDEO MỜ / RUNG LẮC ---
-    - conditions:
-        clarity: "Blurry"
-      overrides:
-        quality_filters:
-          min_blur_clarity: 35.0
-          min_face_size: 70
-          landmark_quality_filter:
-            min_score_hard_cutoff: 0.55
-            min_score_for_core: 0.65
-        clustering:
-          distance_threshold:
-            default: 1.15
-
-    # --- QUY TẮC 5 (KẾT HỢP): PHIM HÀNH ĐỘNG / KINH DỊ (Tối VÀ Mờ) ---
     - conditions:
         lighting: "Dark"
         clarity: "Blurry"
       overrides:
-        merge:
-          within_movie_threshold: 0.45
         quality_filters:
-          clustering:
-            distance_threshold:
-              default: 1.0
-          min_det_score: 0.5
-          min_blur_clarity: 35.0
-          min_face_size: 60
+          min_det_score: 0.30
+          min_blur_clarity: 20.0
+          min_face_size: 40
           landmark_quality_filter:
-            min_score_hard_cutoff: 0.5
-            min_score_for_core: 0.65
-
-    # --- QUY TẮC 3: VIDEO ĐÔNG ĐÚC ---
-    - conditions:
-        complexity: "Crowded"
-      overrides:
-        quality_filters:
-          min_face_size: 56
+            min_score_hard_cutoff: 0.2
+            min_score_for_core: 0.50
         clustering:
           distance_threshold:
-            default: 0.95
+            default: 1.2
         merge:
-          within_movie_threshold: 0.65
+          within_movie_threshold: 0.50
 
-    # --- QUY TẮC 4: VIDEO CHẤT LƯỢNG CAO (Talkshow, Phỏng vấn) ---
     - conditions:
         lighting: "Bright"
         clarity: "Sharp"
         complexity: "Sparse"
       overrides:
         quality_filters:
-          min_det_score: 0.85
-          min_blur_clarity: 65.0
-          min_face_size: 64
+          min_det_score: 0.70
+          min_blur_clarity: 80.0
+          min_face_size: 80
           landmark_quality_filter:
-            min_score_hard_cutoff: 0.75
+            min_score_hard_cutoff: 0.6
             min_score_for_core: 0.85
         clustering:
           distance_threshold:
-            default: 0.9
+            default: 0.85
+        merge:
+          within_movie_threshold: 0.75
+
+    - conditions:
+        clarity: "Blurry"
+      overrides:
+        quality_filters:
+          min_blur_clarity: 25.0
+          min_det_score: 0.50
+        clustering:
+          distance_threshold:
+            default: 1.05
+
+    - conditions:
+        lighting: "Dark"
+        clarity: "Sharp"
+      overrides:
+        quality_filters:
+          min_det_score: 0.35
+          min_blur_clarity: 50.0

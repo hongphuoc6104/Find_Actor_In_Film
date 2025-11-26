@@ -112,11 +112,14 @@ def generate_auto_profile(
     rules = auto_tuning_cfg.get("rules", [])
 
     print("\n--- Applying Auto-Tuning Rules ---")
-    # 1. Áp dụng các quy tắc từ config.yaml (giữ nguyên)
+    # 1. Áp dụng các quy tắc từ config.yaml (giữ nguyên logic cũ)
     for i, rule in enumerate(rules):
         conditions = rule.get("conditions", {})
         if not conditions: continue
+
+        # Logic match: tất cả conditions phải khớp với video_profile
         is_match = all(video_profile.get(key) == value for key, value in conditions.items())
+
         if is_match:
             rule_overrides = rule.get("overrides", {})
             print(f"[AutoTuning] Rule matched: {conditions} -> Applying overrides: {rule_overrides}")
@@ -137,7 +140,8 @@ def generate_auto_profile(
     if complexity_cat and complexity_cat in complexity_adj_map:
         adjustment_factor = complexity_adj_map[complexity_cat]
         final_min_size = int(final_min_size * adjustment_factor)
-        print(f"[AutoTuning] Video is {complexity_cat} -> Adjusting `min_size` up by {adjustment_factor}x to {final_min_size}.")
+        print(
+            f"[AutoTuning] Video is {complexity_cat} -> Adjusting `min_size` up by {adjustment_factor}x to {final_min_size}.")
 
     print(
         f"[AutoTuning] Final `min_size` decided: {final_min_size} (based on duration='{duration_cat}', complexity='{complexity_cat}')")
@@ -150,7 +154,7 @@ def apply_preset(
         cfg: Dict[str, Any],
         video_profile: Optional[Dict[str, str]] = None,
         custom_knobs: Optional[Dict[str, Any]] = None,
-        **kwargs  # Bắt các tham số cũ không còn dùng đến
+        **kwargs
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Áp dụng các lớp cấu hình theo thứ tự ưu tiên.
@@ -173,9 +177,6 @@ def apply_preset(
     min_size_env = _env_int("FS_MIN_SIZE", None)
     if min_size_env is not None:
         env_overrides.setdefault("filter_clusters", {})["min_size"] = min_size_env
-    # ... (thêm các ENV overrides khác nếu cần, ví dụ:)
-    # within_env = _env_float("FS_WITHIN", None)
-    # if within_env is not None: env_overrides.setdefault("merge", {})["within_movie_threshold"] = within_env
 
     if env_overrides:
         merged = deep_merge(merged, env_overrides)
@@ -184,7 +185,7 @@ def apply_preset(
 
 
 # =============================================================================
-# Các hàm tiện ích khác (Giữ nguyên)
+# Các hàm tiện ích khác
 # =============================================================================
 
 def extract_knobs(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -194,6 +195,8 @@ def extract_knobs(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "dist_pca": cfg.get("cluster", {}).get("distance_threshold_pca"),
         "max_age": cfg.get("tracklet", {}).get("max_age"),
         "iou": cfg.get("tracklet", {}).get("iou_threshold"),
+        # [Cập nhật] Thêm min_face_size để debug dễ hơn trong log
+        "min_face_size": cfg.get("quality_filters", {}).get("min_face_size")
     }
 
 

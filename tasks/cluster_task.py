@@ -205,13 +205,15 @@ def _filter_clusters_sizewise(
 # --------------------------------- Task --------------------------------- #
 
 @task(name="Cluster Faces Task")
-def cluster_task():
+def cluster_task(cfg: Dict[str, Any] | None = None) -> str:
     """
     Gom cụm embeddings (mặc định Agglomerative).
     **Bảo đảm chạy một-phim-đơn:** nếu ENV `FS_ACTIVE_MOVIE` được set, chỉ gom cụm của phim đó.
     """
+    # [FIX] Nhận tham số cfg để dùng cấu hình đã được Auto-Tuning
+    if cfg is None:
+        cfg = load_config()
 
-    cfg = load_config()
     storage_cfg = cfg["storage"]
     clustering_cfg = cfg.get("clustering", {})
     pca_cfg = cfg.get("pca", {})

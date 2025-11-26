@@ -156,8 +156,10 @@ def build_character_index(force_rebuild: bool = False) -> Tuple[np.ndarray, List
             centroid = _l2_normalize(vecs.mean(axis=0, keepdims=True))[0]
             rows.append(centroid)
 
+            # --- [FIX] Thêm name vào metadata để hiển thị ---
             metas.append({
                 "character_id": str(char_id),
+                "name": char_data.get("name"),  # <-- Thêm dòng này để lấy tên
                 "movie": movie_title,
                 "rep_image": char_data.get("rep_image"),
                 "preview_paths": char_data.get("preview_paths", []),
