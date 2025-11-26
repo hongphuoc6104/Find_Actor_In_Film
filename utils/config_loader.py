@@ -1,12 +1,6 @@
 # utils/config_loader.py
 """
 Bộ nạp cấu hình trung tâm + preset cho pipeline.
-
-Features:
-  - load_config(): Đọc YAML chính (configs/config.yaml)
-  - apply_preset(): Merge profiles + ENV overrides
-  - load_movie_metadata(): Đọc metadata.json cho từng phim
-  - deep_merge(): Merge nested dicts
 """
 
 from __future__ import annotations
@@ -20,18 +14,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 # =============================================================================
-# Constants
+# Constants & YAML Loader
 # =============================================================================
-
 DEFAULT_CFG_PATH = Path("configs/config.yaml")
 
 
-# =============================================================================
-# YAML loader
-# =============================================================================
-
 def _read_yaml(path: Path) -> Dict[str, Any]:
-    """Đọc YAML file với error handling."""
     if not path.exists():
         raise FileNotFoundError(f"Config not found: {path}")
     with path.open("r", encoding="utf-8") as f:
@@ -39,86 +27,48 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
 
 
 def load_config(path: Optional[str | Path] = None) -> Dict[str, Any]:
-    """
-    Đọc file YAML cấu hình chính và đảm bảo các nhánh cần thiết tồn tại.
-    """
     cfg_path = Path(path) if path else DEFAULT_CFG_PATH
     cfg = _read_yaml(cfg_path)
-
-    # Đảm bảo tồn tại các nhóm chính để tránh KeyError
+    # Thêm auto_tuning vào defaults để đảm bảo luôn tồn tại
     defaults = {
-        "storage": {},
-        "embedding": {},
-        "pca": {},
-        "clustering": {},
-        "cluster": {},  # alias
-        "merge": {},
-        "post_merge": {},
-        "filter": {},
-        "filter_clusters": {},
-        "quality_filters": {},
-        "centroid": {},
-        "index": {},
-        "search": {},
-        "highlight": {},
-        "recognition": {},
-        "frontend": {},
+        "storage": {}, "embedding": {}, "pca": {}, "clustering": {}, "cluster": {},
+        "merge": {}, "post_merge": {}, "filter": {}, "filter_clusters": {},
+        "quality_filters": {}, "centroid": {}, "index": {}, "search": {},
+        "highlight": {}, "recognition": {}, "frontend": {},
         "preview": {"source": "frames", "max_images_per_cluster": 24},
         "tracklet": {"max_age": 3, "iou_threshold": 0.28},
-        "profiles": {},  # quan trọng!
+        "auto_tuning": {"rules": []}  # Đảm bảo nhánh này luôn tồn tại
     }
-
     for key, default_val in defaults.items():
         cfg.setdefault(key, default_val)
-
     return cfg
 
 
 # =============================================================================
-# Deep merge utility
+# Deep merge & Metadata Loader
 # =============================================================================
-
 def deep_merge(*dicts: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Deep merge nhiều dict từ trái sang phải.
-    Dict bên phải ghi đè dict bên trái.
-    """
     result = {}
-
     for d in dicts:
-        if not isinstance(d, dict):
-            continue
-
+        if not isinstance(d, dict): continue
         for key, value in d.items():
             if key in result and isinstance(result[key], dict) and isinstance(value, dict):
                 result[key] = deep_merge(result[key], value)
             else:
                 result[key] = deepcopy(value)
-
     return result
 
 
-# =============================================================================
-# Movie metadata loader
-# =============================================================================
-
 def load_movie_metadata(movie_name: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Load metadata cho movie từ metadata.json.
-    """
     meta_path = Path(cfg["storage"]["metadata_json"])
-
     if not meta_path.exists():
         return {"era": None, "genre": None, "context_tags": [], "custom_knobs": {}}
-
     try:
         with meta_path.open("r", encoding="utf-8") as f:
             all_meta = json.load(f)
     except (json.JSONDecodeError, OSError):
         return {"era": None, "genre": None, "context_tags": [], "custom_knobs": {}}
-
     movie_meta = all_meta.get(movie_name, {})
-
     return {
         "era": movie_meta.get("era"),
         "genre": movie_meta.get("genre"),
@@ -127,10 +77,6 @@ def load_movie_metadata(movie_name: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# =============================================================================
-# ENV override helpers
-# =============================================================================
-# ... (các hàm _env_float, _env_int giữ nguyên) ...
 def _env_float(key: str, default: Optional[float]) -> Optional[float]:
     v = os.getenv(key)
     if v is None or v == "": return default
@@ -150,61 +96,97 @@ def _env_int(key: str, default: Optional[int]) -> Optional[int]:
 
 
 # =============================================================================
-# Profile selection logic
+# --- BỘ NÃO TỰ ĐỘNG TINH CHỈNH PHIÊN BẢN HOÀN CHỈNH ---
 # =============================================================================
-# ... (hàm _choose_profile_key giữ nguyên) ...
-def _choose_profile_key(era: Optional[str], genre: Optional[str], context_tags: Optional[List[str]]) -> str:
-    era_key = (era or "").strip().lower()
-    genre_key = (genre or "").strip().lower()
-    tags = [t.strip().lower() for t in (context_tags or []) if t and t.strip()]
-    if era_key in {"co_trang", "xua"} and "dong_duc" in tags: return "co_trang_dong_duc"
-    if era_key == "hien_dai" and genre_key in {"tinh_cam", "tam_ly", "drama"}: return "hien_dai_tinh_cam"
-    if genre_key in {"hanh_dong", "action"} and any(
-        t in tags for t in ["dong_duc", "rung_lac"]): return "hanh_dong_rung_lac"
-    if era_key in {"xua", "lang_que"}: return "xua_lang_que"
-    if genre_key in {"kinh_di", "horror"} and "toi" in tags: return "kinh_di_toi"
-    return "balanced"
+
+def generate_auto_profile(
+        cfg: Dict[str, Any],
+        video_profile: Dict[str, str]
+) -> Dict[str, Any]:
+    """
+    Dựa trên Video Profile và các quy tắc trong config.yaml,
+    tạo ra một bộ tham số ghi đè.
+    """
+    overrides = {}
+    auto_tuning_cfg = cfg.get("auto_tuning", {})
+    rules = auto_tuning_cfg.get("rules", [])
+
+    print("\n--- Applying Auto-Tuning Rules ---")
+    # 1. Áp dụng các quy tắc từ config.yaml (giữ nguyên)
+    for i, rule in enumerate(rules):
+        conditions = rule.get("conditions", {})
+        if not conditions: continue
+        is_match = all(video_profile.get(key) == value for key, value in conditions.items())
+        if is_match:
+            rule_overrides = rule.get("overrides", {})
+            print(f"[AutoTuning] Rule matched: {conditions} -> Applying overrides: {rule_overrides}")
+            overrides = deep_merge(overrides, rule_overrides)
+
+    # 2. LOGIC MỚI: Đọc quy tắc min_size từ config
+    min_size_rules = auto_tuning_cfg.get("min_size_rules", {})
+    duration_base_map = min_size_rules.get("duration_base", {"Short": 3, "Medium": 5, "Long": 7})
+    complexity_adj_map = min_size_rules.get("complexity_adjustment", {"Crowded": 1.5})
+
+    duration_cat = video_profile.get("duration", "Medium")
+    complexity_cat = video_profile.get("complexity")
+
+    # Lấy ngưỡng cơ bản từ map
+    final_min_size = duration_base_map.get(duration_cat, 5)
+
+    # Điều chỉnh nếu phim đông đúc
+    if complexity_cat and complexity_cat in complexity_adj_map:
+        adjustment_factor = complexity_adj_map[complexity_cat]
+        final_min_size = int(final_min_size * adjustment_factor)
+        print(f"[AutoTuning] Video is {complexity_cat} -> Adjusting `min_size` up by {adjustment_factor}x to {final_min_size}.")
+
+    print(
+        f"[AutoTuning] Final `min_size` decided: {final_min_size} (based on duration='{duration_cat}', complexity='{complexity_cat}')")
+    overrides = deep_merge(overrides, {"filter_clusters": {"min_size": final_min_size}})
+
+    return overrides
 
 
-# =============================================================================
-# Main preset applier
-# =============================================================================
-# ... (hàm apply_preset giữ nguyên) ...
-def apply_preset(cfg: Dict[str, Any], era: Optional[str] = None, genre: Optional[str] = None,
-                 context_tags: Optional[List[str]] = None, profile: Optional[str] = None,
-                 custom_knobs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
-    if profile:
-        profile_key = profile
-    else:
-        profile_key = _choose_profile_key(era, genre, context_tags)
-    profiles = cfg.get("profiles", {})
-    profile_cfg = profiles.get(profile_key, {})
-    if not profile_cfg:
-        profile_cfg = profiles.get("balanced", {})
-        if not profile_cfg:
-            profile_key = "default"
-            profile_cfg = {}
-    merged = deep_merge(cfg, profile_cfg)
-    if custom_knobs: merged = deep_merge(merged, custom_knobs)
+def apply_preset(
+        cfg: Dict[str, Any],
+        video_profile: Optional[Dict[str, str]] = None,
+        custom_knobs: Optional[Dict[str, Any]] = None,
+        **kwargs  # Bắt các tham số cũ không còn dùng đến
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Áp dụng các lớp cấu hình theo thứ tự ưu tiên.
+    Priority (cao → thấp): ENV vars -> custom_knobs -> auto_profile -> base config
+    """
+    merged = deepcopy(cfg)
+    profile_key = "auto_tuned"
+
+    # Lớp 1 (thấp nhất): Cấu hình tự động
+    if video_profile:
+        auto_profile_overrides = generate_auto_profile(merged, video_profile)
+        merged = deep_merge(merged, auto_profile_overrides)
+
+    # Lớp 2: Knobs tùy chỉnh cho từng phim
+    if custom_knobs:
+        merged = deep_merge(merged, custom_knobs)
+
+    # Lớp 3 (cao nhất): Biến môi trường
     env_overrides = {}
-    within = _env_float("FS_WITHIN", None)
-    if within is not None: env_overrides.setdefault("merge", {})["within_movie_threshold"] = within
-    min_size = _env_int("FS_MIN_SIZE", None)
-    if min_size is not None: env_overrides.setdefault("filter_clusters", {})["min_size"] = min_size
-    dist_pca = _env_float("FS_DIST_PCA", None)
-    if dist_pca is not None: env_overrides.setdefault("cluster", {})["distance_threshold_pca"] = dist_pca
-    max_age = _env_int("FS_MAX_AGE", None)
-    if max_age is not None: env_overrides.setdefault("tracklet", {})["max_age"] = max_age
-    iou = _env_float("FS_IOU", None)
-    if iou is not None: env_overrides.setdefault("tracklet", {})["iou_threshold"] = iou
-    if env_overrides: merged = deep_merge(merged, env_overrides)
+    min_size_env = _env_int("FS_MIN_SIZE", None)
+    if min_size_env is not None:
+        env_overrides.setdefault("filter_clusters", {})["min_size"] = min_size_env
+    # ... (thêm các ENV overrides khác nếu cần, ví dụ:)
+    # within_env = _env_float("FS_WITHIN", None)
+    # if within_env is not None: env_overrides.setdefault("merge", {})["within_movie_threshold"] = within_env
+
+    if env_overrides:
+        merged = deep_merge(merged, env_overrides)
+
     return profile_key, merged
 
 
 # =============================================================================
-# Backward compatibility
+# Các hàm tiện ích khác (Giữ nguyên)
 # =============================================================================
-# ... (các hàm extract_knobs, get_recognition_settings giữ nguyên) ...
+
 def extract_knobs(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "within": cfg.get("merge", {}).get("within_movie_threshold"),
@@ -228,51 +210,14 @@ def get_recognition_settings(cfg: dict) -> dict:
     return recog
 
 
-# =============================================================================
-# --- THÊM MỚI: CÁC HÀM TỰ ĐỘNG TINH CHỈNH ---
-# =============================================================================
-
 def get_video_duration(movie_title: str, cfg: Dict[str, Any]) -> Optional[float]:
-    """
-    Đọc metadata.json và trả về duration_seconds của một phim cụ thể.
-    Hàm này đọc thông tin do ingestion_task.py tạo ra.
-    """
     meta_path = Path(cfg["storage"]["metadata_json"])
     if not meta_path.exists():
-        print(f"[AutoTuning] Cảnh báo: không tìm thấy file metadata tại {meta_path}")
         return None
     try:
         with meta_path.open("r", encoding="utf-8") as f:
             all_meta = json.load(f)
-
-        movie_meta = all_meta.get(movie_title, {})
-        duration = movie_meta.get("duration_seconds")
-
+        duration = all_meta.get(movie_title, {}).get("duration_seconds")
         return float(duration) if duration is not None else None
-    except Exception as e:
-        print(f"[AutoTuning] Lỗi khi đọc duration cho phim '{movie_title}': {e}")
+    except Exception:
         return None
-
-
-def determine_min_size_thresholds(duration_seconds: Optional[float]) -> Dict[str, int]:
-    """
-    Dựa vào độ dài video (giây), quyết định các ngưỡng min_size.
-    Trả về một dictionary chứa các ngưỡng cho "main_only" (chỉ nhân vật chính)
-    và "all" (tất cả nhân vật).
-    """
-    # Cung cấp giá trị mặc định an toàn nếu không có thông tin duration
-    if duration_seconds is None:
-        print("[AutoTuning] Không có thông tin duration, sử dụng ngưỡng mặc định cho phim trung bình.")
-        return {"main_only": 7, "all": 3}
-
-    # Video rất ngắn (< 10 phút)
-    if duration_seconds < 600:
-        return {"main_only": 3, "all": 2}
-
-    # Video trung bình (10 - 50 phút)
-    elif 600 <= duration_seconds < 3000:
-        return {"main_only": 7, "all": 3}
-
-    # Video dài (> 50 phút)
-    else:
-        return {"main_only": 15, "all": 5}

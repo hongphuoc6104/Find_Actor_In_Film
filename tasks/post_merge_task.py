@@ -1,6 +1,4 @@
 # tasks/post_merge_task.py
-from __future__ import annotations
-
 import numpy as np
 import pandas as pd
 from prefect import task
@@ -16,86 +14,89 @@ def post_merge_task(
         cfg: dict,
 ) -> pd.DataFrame:
     """
-    Hấp thụ các cụm vệ tinh (chất lượng thấp/góc cạnh) vào các cụm hạt nhân (chất lượng cao).
-
-    Parameters:
-    - core_clusters_df: Dataframe chỉ chứa các cụm hạt nhân (đã được lọc).
-    - all_merged_clusters_df: Dataframe chứa TẤT CẢ các cụm sau bước merge đầu tiên.
-    - cfg: File config.
-
-    Returns:
-    - Dataframe cuối cùng với các cụm vệ tinh đã được gán lại nhãn của cụm hạt nhân.
+    Hấp thụ các cụm vệ tinh vào các cụm hạt nhân gần nhất.
+    Phiên bản này đã được nâng cấp để linh hoạt hơn với tên cột.
     """
+    print("\n--- Starting Post-Merge Task (Satellite Assimilation) ---")
     post_merge_cfg = cfg.get("post_merge", {})
-    if not post_merge_cfg.get("enable", False) or core_clusters_df.empty:
-        print("[PostMerge] Post-merge bị tắt hoặc không có cụm hạt nhân. Bỏ qua.")
-        # Nếu bỏ qua, trả về các cụm hạt nhân đã được lọc
+    if not post_merge_cfg.get("enable", True):
+        print("[PostMerge] Disabled by config. Returning core clusters only.")
         return core_clusters_df
 
-    print("\n--- Starting Post-Merge Task (Satellite Assimilation) ---")
-    distance_threshold = float(post_merge_cfg.get("distance_threshold", 0.45))
+    # --- CẬP NHẬT 1: Điều kiện bảo vệ ban đầu ---
+    if core_clusters_df is None or core_clusters_df.empty:
+        print("[PostMerge] No core clusters provided to assimilate into. Returning empty dataframe.")
+        # Trả về DataFrame rỗng với đúng các cột để tránh lỗi ở các bước sau
+        return pd.DataFrame(columns=all_merged_clusters_df.columns if all_merged_clusters_df is not None else None)
+
+    if all_merged_clusters_df is None or all_merged_clusters_df.empty:
+        print("[PostMerge] No merged clusters data available. Returning core clusters only.")
+        return core_clusters_df
+
+    # --- CẬP NHẬT 2: Tự động tìm tên cột ID và thống nhất nó ---
+    # Tìm tên cột ID (ví dụ: 'final_character_id' hoặc 'cluster_id') trong DataFrame tổng
+    char_col = next((c for c in ["final_character_id", "cluster_id"] if c in all_merged_clusters_df.columns), None)
+
+    # Kiểm tra các cột thiết yếu
+    if not char_col or "track_centroid" not in all_merged_clusters_df.columns:
+        print(
+            f"[PostMerge] Missing required columns ('final_character_id'/'cluster_id', 'track_centroid'). Cannot perform assimilation.")
+        return core_clusters_df
+
+    # Tạo bản sao và thống nhất tên cột thành 'final_character_id' để xử lý nội bộ
+    # Điều này đảm bảo logic bên dưới luôn hoạt động với một tên cột duy nhất
+    core_df = core_clusters_df.copy().rename(columns={char_col: "final_character_id"})
+    all_df = all_merged_clusters_df.copy().rename(columns={char_col: "final_character_id"})
+    # --- KẾT THÚC CẬP NHẬT ---
+
     metric = post_merge_cfg.get("metric", "cosine")
+    distance_threshold = post_merge_cfg.get("distance_threshold", 0.7)
     print(f"[PostMerge] Metric: {metric}, Distance Threshold: {distance_threshold}")
 
-    # Đổi tên cột từ filter_task để nhất quán
-    if "final_character_id" in core_clusters_df.columns:
-        core_clusters_df = core_clusters_df.rename(columns={"final_character_id": "cluster_id"})
+    core_ids = core_df["final_character_id"].unique()
+    satellite_df = all_df[~all_df["final_character_id"].isin(core_ids)]
 
-    # Xác định ID của các cụm hạt nhân và vệ tinh
-    core_ids = set(core_clusters_df["cluster_id"].unique())
-    all_ids = set(all_merged_clusters_df["cluster_id"].unique())
-    satellite_ids = all_ids - core_ids
+    if satellite_df.empty:
+        print("[PostMerge] No satellite clusters to assimilate. Returning core clusters.")
+        return core_df
 
-    if not satellite_ids:
-        print("[PostMerge] Không có cụm vệ tinh nào để hấp thụ.")
-        return core_clusters_df
-
-    # Tính centroid cho TẤT CẢ các cụm
     print("[PostMerge] Calculating centroids for all clusters...")
-    all_centroids = all_merged_clusters_df.groupby("cluster_id")["track_centroid"].apply(
-        lambda x: l2_normalize(np.mean(np.stack(x), axis=0))
-    )
+    # Tính toán centroid một cách an toàn hơn, bỏ qua các giá trị None
+    all_centroids = all_df.groupby("final_character_id")["track_centroid"].apply(
+        lambda e: l2_normalize(np.mean(np.stack([v for v in e if v is not None]), axis=0))
+    ).reset_index()
 
-    core_centroids_map = {cid: all_centroids[cid] for cid in core_ids if cid in all_centroids}
-    satellite_centroids_map = {cid: all_centroids[cid] for cid in satellite_ids if cid in all_centroids}
+    core_centroids = all_centroids[all_centroids["final_character_id"].isin(core_ids)]
+    satellite_centroids = all_centroids[~all_centroids["final_character_id"].isin(core_ids)]
 
-    if not core_centroids_map or not satellite_centroids_map:
-        print("[PostMerge] Thiếu centroids cho hạt nhân hoặc vệ tinh. Bỏ qua.")
-        return core_clusters_df
+    if core_centroids.empty or satellite_centroids.empty:
+        print("[PostMerge] Not enough core or satellite centroids to perform assimilation.")
+        return core_df
 
-    # Chuẩn bị ma trận để tính khoảng cách
-    core_labels = list(core_centroids_map.keys())
-    satellite_labels = list(satellite_centroids_map.keys())
-    core_matrix = np.stack(list(core_centroids_map.values()))
-    satellite_matrix = np.stack(list(satellite_centroids_map.values()))
-
-    # Tính khoảng cách từ mỗi vệ tinh đến TẤT CẢ các hạt nhân
-    print(f"[PostMerge] Calculating distances from {len(satellite_labels)} satellites to {len(core_labels)} cores...")
+    print(
+        f"[PostMerge] Calculating distances from {len(satellite_centroids)} satellites to {len(core_centroids)} cores...")
+    core_matrix = np.stack(core_centroids["track_centroid"].values)
+    satellite_matrix = np.stack(satellite_centroids["track_centroid"].values)
     dist_matrix = cdist(satellite_matrix, core_matrix, metric=metric)
 
-    # Tìm hạt nhân gần nhất cho mỗi vệ tinh
-    closest_core_indices = np.argmin(dist_matrix, axis=1)
-    min_distances = np.min(dist_matrix, axis=1)
+    min_distances = dist_matrix.min(axis=1)
+    closest_core_indices = dist_matrix.argmin(axis=1)
 
-    # Tạo mapping để gộp vệ tinh vào hạt nhân nếu đủ gần
     assimilation_map = {}
     assimilated_count = 0
-    for i, satellite_id in enumerate(satellite_labels):
-        if min_distances[i] < distance_threshold:
-            closest_core_id = core_labels[closest_core_indices[i]]
+    for i, (satellite_id, dist) in enumerate(zip(satellite_centroids["final_character_id"], min_distances)):
+        if dist <= distance_threshold:
+            closest_core_id = core_centroids["final_character_id"].iloc[closest_core_indices[i]]
             assimilation_map[satellite_id] = closest_core_id
             assimilated_count += 1
 
-    print(f"[PostMerge] Assimilated {assimilated_count} / {len(satellite_labels)} satellite clusters.")
+    print(f"[PostMerge] Assimilated {assimilated_count} / {len(satellite_centroids)} satellite clusters.")
 
-    # Áp dụng mapping vào dataframe chứa TẤT CẢ các cụm
-    final_df = all_merged_clusters_df.copy()
-    final_df["cluster_id"] = final_df["cluster_id"].map(assimilation_map).fillna(final_df["cluster_id"])
+    # Áp dụng bản đồ hấp thụ vào DataFrame tổng (đã được thống nhất tên cột)
+    final_df = all_df.copy()
+    final_df["final_character_id"] = final_df["final_character_id"].replace(assimilation_map)
 
-    # Chỉ giữ lại các cụm thuộc về hạt nhân ban đầu hoặc đã được hấp thụ vào hạt nhân
-    final_ids_to_keep = core_ids.union(set(assimilation_map.values()))
-    final_df = final_df[final_df["cluster_id"].isin(final_ids_to_keep)]
-
-    print(f"[PostMerge] Final cluster count: {len(final_df['cluster_id'].unique())}")
+    final_cluster_count = final_df["final_character_id"].nunique()
+    print(f"[PostMerge] Final cluster count: {final_cluster_count}")
 
     return final_df

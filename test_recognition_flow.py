@@ -39,7 +39,7 @@ def main():
     args = parser.parse_args()
 
     print("="*70)
-    print(f"🚀 Bắt đầu nhận diện cho ảnh: {args.image}")
+    print(f" Bắt đầu nhận diện cho ảnh: {args.image}")
     print("="*70)
 
     start_time = time.time()
@@ -49,12 +49,12 @@ def main():
     results = recognize(image_path=args.image)
 
     end_time = time.time()
-    print(f"\n✅ Nhận diện hoàn tất sau {end_time - start_time:.2f} giây.\n")
+    print(f"\n Nhận diện hoàn tất sau {end_time - start_time:.2f} giây.\n")
 
     # --- Phân tích và in kết quả ---
 
     if not results or results.get("is_unknown"):
-        print("❌ Không tìm thấy nhân vật nào phù hợp trong kho dữ liệu.")
+        print(" Không tìm thấy nhân vật nào phù hợp trong kho dữ liệu.")
         sys.exit(0)
 
     # Lặp qua từng phim có kết quả
@@ -69,15 +69,15 @@ def main():
             score = char_info.get("score", 0.0)
             match_label = char_info.get("match_label", "")
 
-            print(f"  👤 Nhân vật ID: {char_id}")
+            print(f"   Nhân vật ID: {char_id}")
             print(f"     - Điểm tương đồng: {score:.4f} ({match_label})")
 
             # Lấy và in thông tin các cảnh xuất hiện
             scenes = char_info.get("scenes", [])
             if not scenes:
-                print("     - ⏱️ Không có thông tin về cảnh xuất hiện.")
+                print("     -  Không có thông tin về cảnh xuất hiện.")
             else:
-                print("     - ⏱️ Các cảnh xuất hiện:")
+                print("     -  Các cảnh xuất hiện:")
                 for i, scene in enumerate(scenes):
                     start = scene.get("start_time")
                     end = scene.get("end_time")

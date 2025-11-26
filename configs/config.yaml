@@ -31,12 +31,9 @@ pca:
   enable: false
 
 # =====================================================================
-# CÁC NÚT VẶN TINH CHỈNH QUAN TRỌNG NHẤT
+# CÁC THAM SỐ MẶC ĐỊNH (Baseline)
+# Dùng cho video "bình thường": chất lượng khá, ánh sáng tốt.
 # =====================================================================
-
-# -------------------------
-# BƯỚC 1: TẠO CỤM BAN ĐẦU (CLUSTERING)
-# -------------------------
 clustering:
   algo: "agglomerative"
   metric: "euclidean"
@@ -57,7 +54,7 @@ merge:
   # tối thiểu giữa hai cụm để gộp chúng lại. Giá trị từ 0 đến 1.
   # - TĂNG: Gộp chặt hơn, yêu cầu hai cụm phải rất giống nhau mới gộp. An toàn hơn nhưng có thể không gộp được các góc mặt khác nhau. Ví dụ: 0.75
   # - GIẢM: Gộp lỏng hơn, "dễ dãi" hơn, có thể gộp được các góc mặt khác nhau nhưng có nguy cơ gộp nhầm hai người. Ví dụ: 0.55
-  within_movie_threshold: 0.5
+  within_movie_threshold: 0.45
 
 # Giai đoạn 2: Hấp thụ Vệ tinh (Satellites)
 post_merge:
@@ -67,7 +64,7 @@ post_merge:
   # từ một cụm vệ tinh đến một cụm hạt nhân để nó được hấp thụ.
   # - TĂNG: Hấp thụ lỏng hơn, "dễ dãi" hơn. Một cụm vệ tinh có thể ở khá xa mà vẫn được gộp vào. Giúp gộp các góc mặt rất khác nhau nhưng có nguy cơ gộp nhầm. Ví dụ: 0.8
   # - GIẢM: Hấp thụ chặt hơn. Vệ tinh phải rất gần hạt nhân mới được gộp. An toàn hơn nhưng có thể bỏ sót các góc mặt khác nhau. Ví dụ: 0.6
-  distance_threshold: 0.65
+  distance_threshold: 0.7
 
 # -------------------------
 # BƯỚC 3: BỘ LỌC KẾT QUẢ
@@ -100,7 +97,7 @@ quality_filters:
 
 #   thông số này kết hợp với min_size để tạo ra được cụm bao nhiêu hình
 #   và mỗi hình bao nhiêu điểm trở lên sẽ được coi là cụm sạch cuối cùng.
-    min_score_for_core: 0.85
+    min_score_for_core: 0.75
 
 # =====================================================================
 # CÁC CẤU HÌNH KHÁC (Ít khi cần chỉnh)
@@ -110,12 +107,114 @@ preview:
   max_images_per_cluster: 999
 
 filter:
-  min_track_size: 5
-  min_cluster_size: 3
+  min_track_size: 100
+  min_cluster_size: 2
+
 tracklet:
   max_age: 3
   iou_threshold: 0.28
 
-profiles:
-  balanced: {}
+# =====================================================================
+# --- BỘ NÃO TỰ ĐỘNG TINH CHỈNH  ---
+#  Nếu video có chất lượng đầu vào tệ (tối, mờ),
+# hãy khắt khe hơn về các tiêu chí khác (đặc biệt là kích thước)
+# để đảm bảo chỉ lấy những dữ liệu tốt nhất có thể.
+# =====================================================================
+auto_tuning:
+  # --- CÁC QUY TẮC QUYẾT ĐỊNH MIN_SIZE ---
+  min_size_rules:
+    # Ngưỡng min_size cơ bản dựa trên thời lượng phim
+    duration_base:
+      Short: 3
+      Medium: 7
+      Long: 10
+    # Hệ số điều chỉnh (nhân lên) khi phim được phân loại là đông đúc
+    # --- ĐẶT ĐÚNG VỊ TRÍ Ở ĐÂY ---
+    complexity_adjustment:
+      Crowded: 1.5
 
+  # --- QUY TẮC CHO BỘ LỌC SƠ TUYỂN ---
+  filter_rules:
+    duration_base:
+      Short:
+        min_track_size: 100
+        min_cluster_size: 3
+      Medium:
+        min_track_size: 100
+        min_cluster_size: 3
+      Long:
+        min_track_size: 6
+        min_cluster_size: 5
+
+  # --- CÁC QUY TẮC GHI ĐÈ THAM SỐ CHUNG ---
+  rules:
+    # --- QUY TẮC 1: VIDEO TỐI ---
+    - conditions:
+        lighting: "Dark"
+      overrides:
+        quality_filters:
+          min_det_score: 0.45
+          min_face_size: 65
+          landmark_quality_filter:
+            min_score_for_core: 0.65
+
+    # --- QUY TẮC 2: VIDEO MỜ / RUNG LẮC ---
+    - conditions:
+        clarity: "Blurry"
+      overrides:
+        quality_filters:
+          min_blur_clarity: 35.0
+          min_face_size: 70
+          landmark_quality_filter:
+            min_score_hard_cutoff: 0.55
+            min_score_for_core: 0.65
+        clustering:
+          distance_threshold:
+            default: 1.15
+
+    # --- QUY TẮC 5 (KẾT HỢP): PHIM HÀNH ĐỘNG / KINH DỊ (Tối VÀ Mờ) ---
+    - conditions:
+        lighting: "Dark"
+        clarity: "Blurry"
+      overrides:
+        merge:
+          within_movie_threshold: 0.45
+        quality_filters:
+          clustering:
+            distance_threshold:
+              default: 1.0
+          min_det_score: 0.5
+          min_blur_clarity: 35.0
+          min_face_size: 60
+          landmark_quality_filter:
+            min_score_hard_cutoff: 0.5
+            min_score_for_core: 0.65
+
+    # --- QUY TẮC 3: VIDEO ĐÔNG ĐÚC ---
+    - conditions:
+        complexity: "Crowded"
+      overrides:
+        quality_filters:
+          min_face_size: 56
+        clustering:
+          distance_threshold:
+            default: 0.95
+        merge:
+          within_movie_threshold: 0.65
+
+    # --- QUY TẮC 4: VIDEO CHẤT LƯỢNG CAO (Talkshow, Phỏng vấn) ---
+    - conditions:
+        lighting: "Bright"
+        clarity: "Sharp"
+        complexity: "Sparse"
+      overrides:
+        quality_filters:
+          min_det_score: 0.85
+          min_blur_clarity: 65.0
+          min_face_size: 64
+          landmark_quality_filter:
+            min_score_hard_cutoff: 0.75
+            min_score_for_core: 0.85
+        clustering:
+          distance_threshold:
+            default: 0.9
