@@ -14,7 +14,7 @@ from utils.config_loader import load_config
 
 
 # =====================================================================
-# CÁC HÀM HELPER (Đã được cải tiến để ổn định hơn)
+# CÁC HÀM HELPER
 # =====================================================================
 
 def _read_metadata(cfg: dict) -> Dict[str, Any]:
@@ -79,19 +79,22 @@ def _limit_scenes(scenes: List[Tuple[float, float]], *, max_scenes: int = 12, mi
     return long_enough[:max_scenes] if max_scenes and max_scenes > 0 else long_enough
 
 
-def _list_previews(preview_root: Path, title: str, char_id: str, *, limit: int = 12) -> List[str]:
+def _list_previews(preview_root: Path, title: str, char_id: str, limit: int = 12) -> List[str]:
     root = preview_root / title / str(char_id)
     paths: List[str] = []
     if root.exists():
-        for p in sorted(root.glob("*.jpg")):
+        # Lấy cả ảnh jpg và png
+        files = sorted(list(root.glob("*.jpg")) + list(root.glob("*.png")))
+        # Ưu tiên ảnh có metadata (nếu cần logic phức tạp hơn thì đọc metadata.json)
+        for p in files:
             paths.append(p.as_posix())
             if len(paths) >= limit: break
     return paths
 
 
 def _load_clusters_parquet(cfg: dict) -> Optional[pd.DataFrame]:
-    # --- CẬP NHẬT: Đọc đường dẫn từ config ---
     storage_cfg = cfg.get("storage", {})
+    # Ưu tiên file merged, sau đó đến file clusters gốc
     candidates = [
         storage_cfg.get("clusters_merged_parquet"),
         storage_cfg.get("warehouse_clusters"),
@@ -107,98 +110,139 @@ def _load_clusters_parquet(cfg: dict) -> Optional[pd.DataFrame]:
     return None
 
 
-def _coerce_int(x: Any) -> Optional[int]:
-    try:
-        return int(x)
-    except Exception:
-        return None
-
-
 def _extract_frame_int(v: Any) -> Optional[int]:
-    if v is None: return None
-    iv = _coerce_int(v)
-    if iv is not None: return iv
-    s = str(v)
-    nums = re.findall(r"\d+", s)
-    if not nums: return None
     try:
-        return int(max(nums, key=len))
+        return int(v)
     except Exception:
-        return None
+        s = str(v)
+        nums = re.findall(r"\d+", s)
+        if not nums: return None
+        return int(max(nums, key=len))
 
 
 # =====================================================================
-# TASK CHÍNH (Đã sửa lỗi đồng bộ)
+# TASK CHÍNH
 # =====================================================================
 
 @task(name="Character Manifest Task")
 def character_task(
         filtered_clusters_df: pd.DataFrame | None = None,
-        cfg: dict | None = None  # <-- CẬP NHẬT 1: Thêm tham số cfg
+        cfg: dict | None = None
 ) -> str:
-    # CẬP NHẬT 2: Ưu tiên cfg được truyền vào
+    """
+    Tạo file characters.json từ dữ liệu cluster.
+    [FIXED] Có logic bảo lưu nhãn (Label Persistence) để tránh mất dữ liệu khi chạy lại.
+    """
     if cfg is None:
-        print("[Characters][WARN] Config không được truyền vào, đang tự đọc lại file config tĩnh.")
         cfg = load_config()
 
     storage_cfg = cfg.get("storage", {})
     meta = _read_metadata(cfg)
 
-    # CẬP NHẬT 3: Đọc đường dẫn từ config để đảm bảo tính nhất quán
     preview_root = Path(storage_cfg.get("cluster_previews_root", "warehouse/cluster_previews"))
     out_path = Path(storage_cfg.get("characters_json", "warehouse/characters.json"))
 
+    # 1. Load Data
     df = filtered_clusters_df
     if df is None or df.empty:
-        df = _load_clusters_parquet(cfg)  # Truyền cfg vào helper
+        df = _load_clusters_parquet(cfg)
 
     if df is None or df.empty:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps({}, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[Characters] No clusters found. Wrote empty manifest -> {out_path}")
+        print(f"[Characters] No clusters found. Writing empty manifest.")
+        if not out_path.exists():
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text("{}", encoding="utf-8")
         return str(out_path)
 
-    # --- Logic nghiệp vụ còn lại giữ nguyên, vì nó đã đủ mạnh mẽ ---
+    # 2. [FIX] Đọc file cũ để backup nhãn (Label Persistence)
+    preserved_labels = {}
+    if out_path.exists():
+        try:
+            old_data = json.loads(out_path.read_text(encoding="utf-8"))
+            for m_title, m_chars in old_data.items():
+                for c_id, c_data in m_chars.items():
+                    # Chỉ backup những nhân vật đã có tên (không phải Unknown hoặc rỗng)
+                    if c_data.get("name") and c_data.get("name") != "Unknown":
+                        key = (str(m_title), str(c_id))
+                        preserved_labels[key] = {
+                            "name": c_data.get("name"),
+                            "label_status": c_data.get("label_status", "MANUAL"),
+                            "label_confidence": c_data.get("label_confidence", 1.0)
+                        }
+            if preserved_labels:
+                print(f"[Characters] Found {len(preserved_labels)} labeled characters to preserve.")
+        except Exception as e:
+            print(f"[Characters] Warning: Could not read existing manifest to preserve labels: {e}")
+
+    # 3. Process Clusters
     char_col = next((c for c in ["final_character_id", "cluster_id"] if c in df.columns), None)
-    movie_col = "movie" if "movie" in df.columns else None
-    frame_col = next((c for c in ["frame", "image", "image_name"] if c in df.columns), None)
+    movie_col = "movie" if "movie" in df.columns else "movie_id"
+    frame_col = next((c for c in ["frame", "image", "image_name", "frame_idx"] if c in df.columns), None)
 
     if not all([char_col, movie_col, frame_col]):
-        raise RuntimeError(
-            f"[Characters] Thiếu các cột cần thiết. Cần: [movie, character_id, frame]. Có: {list(df.columns)}")
+        print(f"[Characters] Missing columns in dataframe: {df.columns}. Skipping.")
+        return str(out_path)
 
     manifest: Dict[str, Dict[str, Any]] = {}
+
+    # Group by Movie & Character
     gb = df.groupby([movie_col, char_col], dropna=False)
 
-    for (title, cluster_id), sub in gb:
-        if not title or pd.isna(title):
-            continue
-        fps = _get_fps_for_title(meta, str(title))
-        frames_int = sorted(set(iv for v in sub[frame_col] if (iv := _extract_frame_int(v)) is not None))
-        if not frames_int:
-            continue
+    for (title_val, cluster_id), sub in gb:
+        title = str(title_val)
+        if not title or title == "nan": continue
 
+        # Lấy FPS
+        fps = _get_fps_for_title(meta, title)
+
+        # Lấy danh sách frame
+        frames_int = sorted(set(iv for v in sub[frame_col] if (iv := _extract_frame_int(v)) is not None))
+
+        # Tính toán Scenes
         raw_scenes = _frames_to_scenes(frames_int, fps=fps, max_gap_s=3.0, pad_s=0.5)
         merged = _merge_overlaps(raw_scenes, tol=0.25)
         final_scenes = _limit_scenes(merged, max_scenes=12, min_len_s=1.2)
 
-        movie_bucket = manifest.setdefault(str(title), {})
-        char_id = str(cluster_id)
-        previews = _list_previews(preview_root, str(title), char_id, limit=12)
-        vurl = f"/videos/{title}"
+        # Lấy Preview Images
+        c_id_str = str(cluster_id)
+        previews = _list_previews(preview_root, title, c_id_str, limit=12)
 
+        # Cấu trúc Scene payload
+        vurl = f"/videos/{title}"
         scene_payload = [
             {"start_time": float(round(s, 3)), "end_time": float(round(e, 3)), "video_url": vurl}
             for (s, e) in final_scenes
         ]
-        movie_bucket[char_id] = {
+
+        # Init Character Data
+        char_data = {
+            "name": "Unknown",  # Default
+            "label_status": "UNLABELED",
+            "label_confidence": 0.0,
             "rep_image": previews[0] if previews else None,
             "preview_paths": previews,
             "scenes": scene_payload
         }
 
+        # 4. [FIX] Restore Preserved Label if exists
+        pres_key = (title, c_id_str)
+        if pres_key in preserved_labels:
+            saved = preserved_labels[pres_key]
+            char_data["name"] = saved["name"]
+            char_data["label_status"] = saved["label_status"]
+            char_data["label_confidence"] = saved["label_confidence"]
+            # Không print để tránh spam log
+
+        manifest.setdefault(title, {})[c_id_str] = char_data
+
+    # 5. Write Atomic
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path = out_path.with_suffix(".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    import os
+    os.replace(tmp_path, out_path)
 
     num_movies = len(manifest)
     num_chars = sum(len(v) for v in manifest.values())
