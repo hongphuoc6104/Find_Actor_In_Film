@@ -61,7 +61,7 @@ quality_filters:
   min_face_size: 50
   landmark_quality_filter:
     enable: true
-    min_score_hard_cutoff: 0.3
+    min_score_hard_cutoff: 0.55  # Chỉ nhận faces >= 70% visibility (yaw < 30°)
     min_score_for_core: 0.70
 
 # Cấu hình tìm kiếm nhận diện (khi user upload ảnh để search)
@@ -107,6 +107,22 @@ auto_tuning:
       Crowded: 1.5
 
   rules:
+    # === RULE CHUNG (áp dụng trước) ===
+    - conditions:
+        clarity: "Blurry"
+      overrides:
+        quality_filters:
+          min_blur_clarity: 25.0
+          min_det_score: 0.50
+        clustering:
+          distance_threshold:
+            default: 0.9
+        merge:
+          within_movie_threshold: 0.45
+        post_merge:
+          distance_threshold: 0.60  # Chuẩn cho EMCHUA18
+
+    # === RULE CỤ THỂ (áp dụng sau, đè lên rule chung) ===
     - conditions:
         lighting: "Dark"
         clarity: "Blurry"
@@ -115,14 +131,13 @@ auto_tuning:
           min_det_score: 0.30
           min_blur_clarity: 20.0
           min_face_size: 40
-          landmark_quality_filter:
-            min_score_hard_cutoff: 0.2
-            min_score_for_core: 0.50
         clustering:
           distance_threshold:
-            default: 1.05
+            default: 0.90  # Giữ lỏng để có nhiều dữ liệu cho merge
         merge:
-          within_movie_threshold: 0.5
+          within_movie_threshold: 0.45  # bị lẻ
+        post_merge:
+          distance_threshold: 0.70  # gộp chung
 
     - conditions:
         lighting: "Bright"
@@ -133,28 +148,11 @@ auto_tuning:
           min_det_score: 0.70
           min_blur_clarity: 80.0
           min_face_size: 80
-          landmark_quality_filter:
-            min_score_hard_cutoff: 0.6
-            min_score_for_core: 0.85
         clustering:
           distance_threshold:
             default: 0.95
         merge:
           within_movie_threshold: 0.6
-
-    - conditions:
-        clarity: "Blurry"
-      overrides:
-        quality_filters:
-          min_blur_clarity: 25.0
-          min_det_score: 0.50
-        clustering:
-          distance_threshold:
-            default: 0.85
-        merge:
-          within_movie_threshold: 0.55
-        post_merge:
-          distance_threshold: 0.60
 
 
     - conditions:
