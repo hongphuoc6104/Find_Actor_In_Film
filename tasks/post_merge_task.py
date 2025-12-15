@@ -1,9 +1,10 @@
 # tasks/post_merge_task.py
+import os
 import numpy as np
 import pandas as pd
 from prefect import task
 from scipy.spatial.distance import cdist
-
+from pathlib import Path
 from utils.vector_utils import l2_normalize
 
 
@@ -14,89 +15,121 @@ def post_merge_task(
         cfg: dict,
 ) -> pd.DataFrame:
     """
-    Hấp thụ các cụm vệ tinh vào các cụm hạt nhân gần nhất.
-    Phiên bản này đã được nâng cấp để linh hoạt hơn với tên cột.
+    Hấp thụ các cụm vệ tinh và LƯU TRỮ PER-MOVIE PARQUET để phục vụ tìm kiếm lâu dài.
     """
     print("\n--- Starting Post-Merge Task (Satellite Assimilation) ---")
     post_merge_cfg = cfg.get("post_merge", {})
-    if not post_merge_cfg.get("enable", True):
-        print("[PostMerge] Disabled by config. Returning core clusters only.")
-        return core_clusters_df
+    storage = cfg.get("storage", {})
 
-    # --- CẬP NHẬT 1: Điều kiện bảo vệ ban đầu ---
+    # Setup thư mục lưu trữ Parquet riêng lẻ
+    # Lấy thư mục cha của warehouse_clusters (thường là warehouse/parquet/)
+    wh_cluster_path = Path(storage.get("warehouse_clusters", "warehouse/parquet/clusters.parquet"))
+    wh_parquet_dir = wh_cluster_path.parent
+    wh_parquet_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Bảo vệ đầu vào
     if core_clusters_df is None or core_clusters_df.empty:
-        print("[PostMerge] No core clusters provided to assimilate into. Returning empty dataframe.")
-        # Trả về DataFrame rỗng với đúng các cột để tránh lỗi ở các bước sau
-        return pd.DataFrame(columns=all_merged_clusters_df.columns if all_merged_clusters_df is not None else None)
+        return pd.DataFrame()
 
-    if all_merged_clusters_df is None or all_merged_clusters_df.empty:
-        print("[PostMerge] No merged clusters data available. Returning core clusters only.")
-        return core_clusters_df
-
-    # --- CẬP NHẬT 2: Tự động tìm tên cột ID và thống nhất nó ---
-    # Tìm tên cột ID (ví dụ: 'final_character_id' hoặc 'cluster_id') trong DataFrame tổng
+    # 2. Chuẩn hóa tên cột
     char_col = next((c for c in ["final_character_id", "cluster_id"] if c in all_merged_clusters_df.columns), None)
-
-    # Kiểm tra các cột thiết yếu
-    if not char_col or "track_centroid" not in all_merged_clusters_df.columns:
-        print(
-            f"[PostMerge] Missing required columns ('final_character_id'/'cluster_id', 'track_centroid'). Cannot perform assimilation.")
+    if not char_col:
+        print("[PostMerge] Missing ID column.")
         return core_clusters_df
 
-    # Tạo bản sao và thống nhất tên cột thành 'final_character_id' để xử lý nội bộ
-    # Điều này đảm bảo logic bên dưới luôn hoạt động với một tên cột duy nhất
     core_df = core_clusters_df.copy().rename(columns={char_col: "final_character_id"})
     all_df = all_merged_clusters_df.copy().rename(columns={char_col: "final_character_id"})
-    # --- KẾT THÚC CẬP NHẬT ---
 
-    metric = post_merge_cfg.get("metric", "cosine")
-    distance_threshold = post_merge_cfg.get("distance_threshold", 0.7)
-    print(f"[PostMerge] Metric: {metric}, Distance Threshold: {distance_threshold}")
-
-    core_ids = core_df["final_character_id"].unique()
-    satellite_df = all_df[~all_df["final_character_id"].isin(core_ids)]
-
-    if satellite_df.empty:
-        print("[PostMerge] No satellite clusters to assimilate. Returning core clusters.")
-        return core_df
-
-    print("[PostMerge] Calculating centroids for all clusters...")
-    # Tính toán centroid một cách an toàn hơn, bỏ qua các giá trị None
-    all_centroids = all_df.groupby("final_character_id")["track_centroid"].apply(
-        lambda e: l2_normalize(np.mean(np.stack([v for v in e if v is not None]), axis=0))
-    ).reset_index()
-
-    core_centroids = all_centroids[all_centroids["final_character_id"].isin(core_ids)]
-    satellite_centroids = all_centroids[~all_centroids["final_character_id"].isin(core_ids)]
-
-    if core_centroids.empty or satellite_centroids.empty:
-        print("[PostMerge] Not enough core or satellite centroids to perform assimilation.")
-        return core_df
-
-    print(
-        f"[PostMerge] Calculating distances from {len(satellite_centroids)} satellites to {len(core_centroids)} cores...")
-    core_matrix = np.stack(core_centroids["track_centroid"].values)
-    satellite_matrix = np.stack(satellite_centroids["track_centroid"].values)
-    dist_matrix = cdist(satellite_matrix, core_matrix, metric=metric)
-
-    min_distances = dist_matrix.min(axis=1)
-    closest_core_indices = dist_matrix.argmin(axis=1)
-
-    assimilation_map = {}
-    assimilated_count = 0
-    for i, (satellite_id, dist) in enumerate(zip(satellite_centroids["final_character_id"], min_distances)):
-        if dist <= distance_threshold:
-            closest_core_id = core_centroids["final_character_id"].iloc[closest_core_indices[i]]
-            assimilation_map[satellite_id] = closest_core_id
-            assimilated_count += 1
-
-    print(f"[PostMerge] Assimilated {assimilated_count} / {len(satellite_centroids)} satellite clusters.")
-
-    # Áp dụng bản đồ hấp thụ vào DataFrame tổng (đã được thống nhất tên cột)
+    # 3. Satellite Assimilation Logic
     final_df = all_df.copy()
-    final_df["final_character_id"] = final_df["final_character_id"].replace(assimilation_map)
 
-    final_cluster_count = final_df["final_character_id"].nunique()
-    print(f"[PostMerge] Final cluster count: {final_cluster_count}")
+    if post_merge_cfg.get("enable", True):
+        metric = post_merge_cfg.get("metric", "cosine")
+        threshold = post_merge_cfg.get("distance_threshold", 0.60)
+        min_core_size = 10  # Clusters >= 10 faces are "core", < 10 are "satellites"
+        
+        print(f"[PostMerge] Satellite assimilation: metric={metric}, threshold={threshold}")
+        
+        # Check if embeddings exist
+        if "emb" not in all_df.columns:
+            print("[PostMerge] No embeddings found, skipping assimilation")
+        else:
+            # Identify core and satellite clusters
+            cluster_sizes = all_df.groupby("final_character_id").size()
+            core_clusters = cluster_sizes[cluster_sizes >= min_core_size].index.tolist()
+            satellite_clusters = cluster_sizes[cluster_sizes < min_core_size].index.tolist()
+            
+            if not core_clusters:
+                print(f"[PostMerge] No core clusters found (min_size={min_core_size}), skipping")
+            elif not satellite_clusters:
+                print(f"[PostMerge] No satellite clusters to assimilate")
+            else:
+                print(f"[PostMerge] Found {len(core_clusters)} core clusters, {len(satellite_clusters)} satellites")
+                
+                # Compute core centroids
+                core_centroids = {}
+                for core_id in core_clusters:
+                    core_faces = all_df[all_df["final_character_id"] == core_id]
+                    embs = np.vstack(core_faces["emb"].values)
+                    centroid = embs.mean(axis=0)
+                    if metric == "cosine":
+                        centroid = l2_normalize(centroid.reshape(1, -1)).flatten()
+                    core_centroids[core_id] = centroid
+                
+                # Assimilate satellites
+                assimilated_count = 0
+                for sat_id in satellite_clusters:
+                    sat_faces = all_df[all_df["final_character_id"] == sat_id]
+                    sat_embs = np.vstack(sat_faces["emb"].values)
+                    sat_centroid = sat_embs.mean(axis=0)
+                    if metric == "cosine":
+                        sat_centroid = l2_normalize(sat_centroid.reshape(1, -1)).flatten()
+                    
+                    # Find nearest core
+                    min_dist = float("inf")
+                    best_core = None
+                    
+                    for core_id, core_centroid in core_centroids.items():
+                        if metric == "cosine":
+                            # Cosine distance = 1 - cosine similarity
+                            # Both vectors are already normalized
+                            dist = 1.0 - np.dot(sat_centroid, core_centroid)
+                        else:
+                            dist = np.linalg.norm(sat_centroid - core_centroid)
+                        
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_core = core_id
+                    
+                    # Assimilate if within threshold
+                    if min_dist < threshold and best_core is not None:
+                        final_df.loc[final_df["final_character_id"] == sat_id, "final_character_id"] = best_core
+                        assimilated_count += 1
+                
+                print(f"[PostMerge] Assimilated {assimilated_count}/{len(satellite_clusters)} satellites into cores")
+
+
+        # 4. [CRITICAL] Lưu File Parquet Riêng Cho Từng Phim
+    active_movie = (os.getenv("FS_ACTIVE_MOVIE") or "").strip()
+
+    if active_movie:
+        # Lọc chỉ lấy dữ liệu của phim hiện tại
+        if "movie" in final_df.columns:
+            movie_final_df = final_df[final_df["movie"] == active_movie]
+        else:
+            # Fallback nếu không có cột movie
+            movie_final_df = final_df
+
+        if not movie_final_df.empty:
+            # File này sẽ tồn tại vĩnh viễn: warehouse/parquet/NHA_BA_NU_clusters.parquet
+            per_movie_path = wh_parquet_dir / f"{active_movie}_clusters.parquet"
+            movie_final_df.to_parquet(per_movie_path, index=False)
+            print(f"[PostMerge] ✅ Saved PERSISTENT cluster data for '{active_movie}' -> {per_movie_path}")
+        else:
+            print(f"[PostMerge] Warning: No data for movie '{active_movie}' to save.")
+
+    # 5. Vẫn lưu file merged tổng tạm thời (cho các bước sau trong cùng pipeline dùng)
+    merged_path = Path(storage.get("clusters_merged_parquet", "warehouse/parquet/clusters_merged.parquet"))
+    final_df.to_parquet(merged_path, index=False)
 
     return final_df

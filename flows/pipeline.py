@@ -1,6 +1,9 @@
 # flows/pipeline.py
 # !/usr/bin/env python3
 from __future__ import annotations
+
+
+
 import argparse
 import os
 import sys
@@ -41,6 +44,9 @@ def face_clustering_pipeline(
     active_movie = movie.strip()
     os.environ["FS_ACTIVE_MOVIE"] = active_movie
     base_cfg = load_config()
+
+
+
     _banner(f"🎬 PIPELINE START: {active_movie}")
 
     # 1. Ingestion
@@ -49,16 +55,20 @@ def face_clustering_pipeline(
         found = ingestion_task(movie=active_movie)
         if not found:
             print(f"[Error] Video '{active_movie}' not found.")
+
             return {"status": "FAILED"}
 
     # 1.5 Analysis
     _banner("Stage 1.5: Video Analysis")
     video_profile = analyze_video_task(movie_title=active_movie)
 
+
     # Apply Config
     movie_meta = load_movie_metadata(active_movie, base_cfg)
     profile_key, cfg = apply_preset(base_cfg, video_profile, movie_meta.get("custom_knobs"))
     print(f"[Info] Applied Profile: {profile_key}")
+
+
 
     # 2. Embedding
     if not skip_embedding:
@@ -70,6 +80,7 @@ def face_clustering_pipeline(
     warehouse_path, row_count = build_warehouse_task()
     if row_count == 0:
         print("[Stop] No embeddings found.")
+
         return {"status": "SKIPPED"}
 
     # 4. Clustering
@@ -107,7 +118,9 @@ def face_clustering_pipeline(
     _banner("Stage 11: Validation")
     validation_task(cfg=cfg)
 
-    _banner("✅ PIPELINE COMPLETED")
+
+
+    _banner(" PIPELINE COMPLETED")
     return {"status": "SUCCESS", "manifest": manifest_path}
 
 

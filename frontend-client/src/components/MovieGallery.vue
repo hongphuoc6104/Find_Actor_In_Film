@@ -6,12 +6,35 @@ const API_BASE = "http://localhost:8000";
 const movies = ref([]);
 const isLoading = ref(false);
 
+// --- [NEW] TỪ ĐIỂN TÊN PHIM (Đồng bộ với SearchSection) ---
+const MOVIE_NAMES = {
+    "HEMCUT": "Hẻm Cụt",
+    "GAIGIALAMCHIEU": "Gái Già Lắm Chiêu",
+    "NHAGIATIEN": "Nhà Gia Tiên",
+    "BOGIA": "Bố Già",
+    "CHUYENXOMTUI": "Chuyện Xóm Tui",
+    "DENAMHON": "Đèn Âm Hồn",
+    "EMCHUA18": "Em Chưa 18",
+    "NGUOIVOCUOICUNG": "Người Vợ Cuối Cùng",
+    "KEANDANH": "Kẻ Ẩn Danh",
+    "SIEULAYGAPSIEULUA": "Siêu Lầy Gặp Siêu Lừa",
+    "TAMCAM": "Tấm Cám",
+    "NANG2": "Nắng 2"
+};
+
 // Helper xử lý URL
 const getFullUrl = (url) => {
     if (!url) return '';
     if (url.startsWith('http')) return url;
     const cleanPath = url.startsWith('/') ? url.slice(1) : url;
     return `${API_BASE}/${cleanPath}`;
+};
+
+// [NEW] Hàm lấy tên hiển thị tiếng Việt
+const getMovieDisplayName = (rawName) => {
+    if (!rawName) return "";
+    const key = rawName.toUpperCase();
+    return MOVIE_NAMES[key] || rawName;
 };
 
 const fetchMovies = async () => {
@@ -55,7 +78,10 @@ onMounted(() => {
 
                 <!-- Info -->
                 <div class="p-6">
-                    <h3 class="font-serif text-xl text-white truncate mb-2 group-hover:text-[#E50914] transition-colors">{{ movie.movie_name }}</h3>
+                    <!-- [EDITED] Áp dụng hàm getMovieDisplayName tại đây -->
+                    <h3 class="font-serif text-xl text-white truncate mb-2 group-hover:text-[#E50914] transition-colors">
+                        {{ getMovieDisplayName(movie.movie_name) }}
+                    </h3>
                     <div class="flex justify-between items-center border-t border-[#333] pt-4 mt-2">
                         <span class="text-xs text-gray-500 uppercase tracking-widest">Thời lượng: {{ movie.duration || 'N/A' }}</span>
                         <span class="text-xs font-bold text-white bg-[#E50914] px-2 py-0.5">HD</span>
