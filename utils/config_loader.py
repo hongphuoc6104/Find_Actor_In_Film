@@ -44,6 +44,53 @@ def load_config(path: Optional[str | Path] = None) -> Dict[str, Any]:
     return cfg
 
 
+def load_video_config(
+    movie_name: str,
+    base_config_path: Optional[str | Path] = None
+) -> Dict[str, Any]:
+    """
+    Load config with video-specific overrides.
+    
+    Priority (high → low):
+    1. configs/videos/{movie_name}.yaml (video-specific overrides)
+    2. configs/config.yaml (base config)
+    
+    Args:
+        movie_name: Name of the movie/video
+        base_config_path: Optional path to base config (defaults to config.yaml)
+    
+    Returns:
+        Merged configuration dictionary
+    
+    Example:
+        cfg = load_video_config("CHUYENXOMTUI")
+        # If configs/videos/CHUYENXOMTUI.yaml exists, it will override base params
+    """
+    # Load base config
+    base_cfg = load_config(base_config_path)
+    
+    # Check for video-specific config
+    video_cfg_path = Path("configs/videos") / f"{movie_name}.yaml"
+    
+    if video_cfg_path.exists():
+        try:
+            video_overrides = _read_yaml(video_cfg_path)
+            cfg = deep_merge(base_cfg, video_overrides)
+            print(f"[Config] ✅ Loaded video-specific config for: {movie_name}")
+            print(f"[Config]    File: {video_cfg_path}")
+        except Exception as e:
+            print(f"[Config] ⚠️  Error loading video config {video_cfg_path}: {e}")
+            print(f"[Config]    Falling back to base config")
+            cfg = base_cfg
+    else:
+        cfg = base_cfg
+        print(f"[Config] ℹ️  No video-specific config for '{movie_name}'")
+        print(f"[Config]    Using base config: {base_config_path or DEFAULT_CFG_PATH}")
+        print(f"[Config]    To save params for this video, create: {video_cfg_path}")
+    
+    return cfg
+
+
 # =============================================================================
 # Deep merge & Metadata Loader
 # =============================================================================

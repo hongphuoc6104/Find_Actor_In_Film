@@ -1,0 +1,25 @@
+# Video-specific config for: CHUYENXOMTUI
+# Final: Keep only MAIN actors (30+ images)
+
+clustering:
+  distance_threshold:
+    default: 0.90  # Keep balanced
+
+merge:
+  within_movie_threshold: 0.45  # Keep moderate
+
+post_merge:
+  distance_threshold: 0.60  # Keep standard
+
+# min_size=18 is optimal (tested: 6 clusters, Purity 0.54)
+filter_clusters:
+  min_size: 18
+
+quality_filters:
+  min_det_score: 0.50  # Moderate
+  min_blur_clarity: 45.0  # Moderate
+  min_face_size: 55  # Moderate
+  landmark_quality_filter:
+    enable: true
+    min_score_hard_cutoff: 0.58
+    min_score_for_core: 0.72

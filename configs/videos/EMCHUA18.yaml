@@ -1,0 +1,20 @@
+# Video-specific config for: EMCHUA18
+# Optimal: min_size=12 (tested: 5 clusters, Purity 0.38)
+
+filter_clusters:
+  min_size: 12  # Optimal for medium film
+
+clustering:
+  distance_threshold:
+    default: 0.85
+
+merge:
+  within_movie_threshold: 0.50
+
+post_merge:
+  distance_threshold: 0.55
+
+quality_filters:
+  min_det_score: 0.35
+  min_blur_clarity: 25.0
+  min_face_size: 50

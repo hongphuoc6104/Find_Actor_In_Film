@@ -25,7 +25,8 @@ def _get_app(ctx_id: int = 0):
     if _APP is None:
         try:
             _APP = FaceAnalysis(name="buffalo_l")
-            _APP.prepare(ctx_id=ctx_id, det_size=(640, 640))
+            # Use smaller det_size for better small face detection (labeled images are often crops)
+            _APP.prepare(ctx_id=ctx_id, det_size=(416, 416))
         except Exception as e:
             print(f"[Labeling] Init InsightFace error: {e}")
             return None
@@ -102,110 +103,130 @@ def assign_labels_task(cfg: dict | None = None) -> str:
     storage = cfg["storage"]
     labeled_root = Path(storage.get("labeled_faces_root", "warehouse/labeled_faces"))
     characters_json_path = Path(storage.get("characters_json", "warehouse/characters.json"))
-    # Ưu tiên đọc từ file merged parquet
-    clusters_path = Path(storage.get("clusters_merged_parquet", "warehouse/parquet/clusters_merged.parquet"))
 
     sim_threshold = float(label_cfg.get("similarity_threshold", 0.55))
 
-    # 1. Build Index
+    # 1. Build Reference Index
     index, id_map, ref_count, ref_dim = _build_reference_index(labeled_root)
     if index is None:
         print("[Labeling] No reference images. Skipping.")
         return "NoRefImages"
 
-    # 2. Load Clusters
-    if not clusters_path.exists():
-        print(f"[Labeling] Clusters file missing: {clusters_path}")
-        return "NoClusters"
-
-    df = pd.read_parquet(clusters_path)
-    active_movie = (os.getenv("FS_ACTIVE_MOVIE") or "").strip()
-    if active_movie and "movie" in df.columns:
-        df = df[df["movie"] == active_movie]
-
-    if df.empty:
-        print("[Labeling] No cluster data to label.")
-        return "NoData"
-
-    char_col = next((c for c in ["final_character_id", "cluster_id"] if c in df.columns), None)
-
-    # 3. Compute Centroids (Optimized)
-    # Thay vì tính lại từ raw vector, ta gom nhóm track_centroid có sẵn
-    print(f"[Labeling] Computing centroids for {df[char_col].nunique()} clusters...")
-
-    cluster_vectors = []
-    cluster_ids = []
-
-    # Lọc bỏ các dòng có track_centroid bị null/NaN
-    df_valid = df.dropna(subset=["track_centroid"])
-
-    for c_id, group in df_valid.groupby(char_col):
-        # Stack các track_centroid lại (chúng đã là list/array float)
-        # Lưu ý: track_centroid trong parquet có thể được lưu dưới dạng list
-        vecs = np.stack(group["track_centroid"].values)
-        if vecs.size == 0: continue
-
-        # Tính mean của cluster và normalize
-        mean_vec = np.mean(vecs, axis=0)
-        norm_vec = l2_normalize(mean_vec)
-
-        cluster_vectors.append(norm_vec)
-        cluster_ids.append(str(c_id))
-
-    if not cluster_vectors:
-        print("[Labeling] No valid centroids.")
-        return "NoCentroids"
-
-    query_matrix = np.ascontiguousarray(np.stack(cluster_vectors), dtype=np.float32)
-
-    # 4. Search
-    D, I = index.search(query_matrix, k=1)
-
-    matches = {}
-    for idx, (sim, ref_idx) in enumerate(zip(D, I)):
-        score = float(sim[0])
-        if score >= sim_threshold:
-            ref_id = int(ref_idx[0])
-            name = id_map.get(ref_id, "Unknown")
-            c_id = cluster_ids[idx]
-            matches[c_id] = {"name": name, "score": score}
-            print(f"  [Match] Cluster {c_id} == {name} ({score:.3f})")
-
-    # 5. Update JSON
+    # 2. Load characters.json to get list of movies
     if not characters_json_path.exists():
-        print("[Labeling] characters.json missing. Run character_task first.")
+        print("[Labeling] characters.json missing.")
         return "NoJson"
 
     try:
         with open(characters_json_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
+    except Exception as e:
+        print(f"[Labeling] Error loading JSON: {e}")
+        return "Error"
 
+    # 3. Process each movie separately
+    total_matches = {}
+    
+    for movie_title in manifest.keys():
+        if movie_title.startswith("_"):
+            continue
+
+        print(f"\n[Labeling] Processing movie: {movie_title}")
+        
+        # Load per-movie parquet file
+        parquet_path = Path(f"warehouse/parquet/{movie_title}_clusters.parquet")
+        if not parquet_path.exists():
+            print(f"  ⚠️  Parquet not found: {parquet_path}")
+            continue
+
+        try:
+            df = pd.read_parquet(parquet_path)
+        except Exception as e:
+            print(f"  ⚠️  Error loading parquet: {e}")
+            continue
+
+        if df.empty:
+            print(f"  ⚠️  Empty parquet")
+            continue
+
+        char_col = next((c for c in ["final_character_id", "cluster_id"] if c in df.columns), None)
+        if not char_col:
+            print(f"  ⚠️  No character ID column")
+            continue
+
+        # Compute centroids for this movie
+        cluster_vectors = []
+        cluster_ids = []
+
+        df_valid = df.dropna(subset=["track_centroid"])
+
+        for c_id, group in df_valid.groupby(char_col):
+            vecs = np.stack(group["track_centroid"].values)
+            if vecs.size == 0:
+                continue
+
+            mean_vec = np.mean(vecs, axis=0)
+            norm_vec = l2_normalize(mean_vec)
+
+            cluster_vectors.append(norm_vec)
+            cluster_ids.append(str(c_id))
+
+        if not cluster_vectors:
+            print(f"  ⚠️  No valid centroids")
+            continue
+
+        query_matrix = np.ascontiguousarray(np.stack(cluster_vectors), dtype=np.float32)
+
+        # Search against labeled faces
+        D, I = index.search(query_matrix, k=1)
+
+        # Collect matches for this movie
+        for idx, (sim, ref_idx) in enumerate(zip(D, I)):
+            score = float(sim[0])
+            if score >= sim_threshold:
+                ref_id = int(ref_idx[0])
+                name = id_map.get(ref_id, "Unknown")
+                c_id = cluster_ids[idx]
+                
+                if movie_title not in total_matches:
+                    total_matches[movie_title] = {}
+                
+                total_matches[movie_title][c_id] = {"name": name, "score": score}
+                print(f"  ✅ Match: {c_id} == {name} ({score:.3f})")
+
+    # 4. Update JSON with all matches
+    if not total_matches:
+        print("\n[Labeling] No matches found across all movies.")
+        return "NoMatches"
+
+    try:
         updated = 0
-        movies = [active_movie] if active_movie in manifest else manifest.keys()
+        for movie_title, matches in total_matches.items():
+            if movie_title not in manifest:
+                continue
+                
+            chars = manifest[movie_title]
+            for c_id, match_data in matches.items():
+                if c_id not in chars:
+                    continue
+                
+                # Skip if already manually labeled
+                if chars[c_id].get("label_status") == "MANUAL":
+                    continue
 
-        for mov in movies:
-            chars = manifest.get(mov, {})
-            for c_id, c_data in chars.items():
-                if c_id in matches:
-                    # [Logic Override] Nếu manual đã gán tên rồi thì có thể chọn bỏ qua
-                    # Ở đây ta ưu tiên Auto nếu status != 'MANUAL'
-                    if c_data.get("label_status") == "MANUAL":
-                        continue
-
-                    m = matches[c_id]
-                    c_data["name"] = m["name"]
-                    c_data["label_status"] = "AUTO_ASSIGNED"
-                    c_data["label_confidence"] = round(m["score"], 4)
-                    updated += 1
+                chars[c_id]["name"] = match_data["name"]
+                chars[c_id]["label_status"] = "AUTO_ASSIGNED"
+                chars[c_id]["label_confidence"] = round(match_data["score"], 4)
+                updated += 1
 
         if updated > 0:
             tmp = characters_json_path.with_suffix(".tmp")
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2, ensure_ascii=False)
             os.replace(tmp, characters_json_path)
-            print(f"[Labeling] Updated {updated} labels in characters.json")
+            print(f"\n[Labeling] ✅ Updated {updated} labels across {len(total_matches)} movies")
         else:
-            print("[Labeling] No new labels applied.")
+            print("\n[Labeling] No new labels applied.")
 
     except Exception as e:
         print(f"[Labeling] Error updating json: {e}")

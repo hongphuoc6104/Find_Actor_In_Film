@@ -1,0 +1,5 @@
+# Video-specific config for: HEMCUT
+# Optimal: min_size=20 (tested: 9 clusters, Purity 0.47)
+
+filter_clusters:
+  min_size: 20  # Optimal for medium film

@@ -1,20 +1,31 @@
-# Virtual environment
+# ===========================================
+# FACE CLUSTERING PROJECT - GITIGNORE
+# ===========================================
+
+# ----------------------
+# Virtual Environments
+# ----------------------
 .venv/
+.venv1/
 env/
+venv/
 *.egg-info/
 
+# ----------------------
 # IDE / Editors
+# ----------------------
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
+
+# ----------------------
+# Data & Heavy Files (DVC tracked)
+# ----------------------
 Data/
 models/
-# Ignore warehouse data but keep code
-warehouse/*
-!warehouse/__init__.py
-!warehouse/update_pipeline.py
-!warehouse/characters.json
-
-# Data & models (không đưa dữ liệu & weight nặng lên git)
+*.parquet
 *.h5
 *.pt
 *.ckpt
@@ -22,22 +33,69 @@ warehouse/*
 *.npz
 *.joblib
 
-# Python cache
+# ----------------------
+# Warehouse (keep structure, ignore data)
+# ----------------------
+warehouse/parquet/
+warehouse/cluster_previews/
+warehouse/evaluation/
+warehouse/labeled_faces/
+# Keep manifest file
+!warehouse/characters.json
+
+# ----------------------
+# Reports & Logs (regenerable)
+# ----------------------
+reports/
+logs/
+*.log
+debug/
+
+# ----------------------
+# Python Cache
+# ----------------------
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache/
 
-# Notebook checkpoints
+# ----------------------
+# Notebook
+# ----------------------
 .ipynb_checkpoints/
 
-# Logs & debug
-*.log
-logs/
-debug/
+# ----------------------
+# Temp Files
+# ----------------------
+temp_uploads/
+*.tmp
+*.temp
 
-# System files
+# ----------------------
+# System Files
+# ----------------------
 .DS_Store
 Thumbs.db
-warehouse/characters.json
-warehouse/characters.json
+
+# ----------------------
+# Poster Images (optional - for thesis)
+# ----------------------
+poster_images/
+Pts.png
+poster_nghien_cuu.png
+
+# ----------------------
+# Frontend Build
+# ----------------------
+frontend-client/node_modules/
+frontend-client/.next/
+frontend-client/dist/
+frontend-client/build/
+
+# ----------------------
+# DVC (data version control)
+# ----------------------
+*.dvc
+.dvc/cache/
+.dvc/tmp/

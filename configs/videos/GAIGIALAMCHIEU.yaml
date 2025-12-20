@@ -1,0 +1,5 @@
+# Video-specific config for: GAIGIALAMCHIEU
+# Optimal: min_size=30 (tested: 11 clusters, Purity 0.35)
+
+filter_clusters:
+  min_size: 30  # Optimal for long film with many actors

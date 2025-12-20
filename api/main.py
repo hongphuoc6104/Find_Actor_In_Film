@@ -221,7 +221,7 @@ async def search_face(file: UploadFile = File(...)):
                 
                 formatted_chars.append({
                     "character_id": char_id,
-                    "name": char.get("character_name", "Unknown"),
+                    "name": char.get("name", "Diễn viên"),  # Changed from character_name to name
                     "score": char.get("score", 0.0),
                     "score_display": f"{int(char.get('score', 0) * 100)}%",
                     "match_status": char.get("match_status", "SUGGESTION"),

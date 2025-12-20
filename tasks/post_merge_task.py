@@ -27,11 +27,30 @@ def post_merge_task(
     wh_parquet_dir = wh_cluster_path.parent
     wh_parquet_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Bảo vệ đầu vào
-    if core_clusters_df is None or core_clusters_df.empty:
-        return pd.DataFrame()
+    # 1. [CRITICAL] Lưu File Parquet Riêng Cho Từng Phim TRƯỚC KHI filter
+    # Điều này đảm bảo per-movie parquet luôn được lưu, bất kể filter có pass hay không
+    active_movie = (os.getenv("FS_ACTIVE_MOVIE") or "").strip()
+    
+    if active_movie and all_merged_clusters_df is not None and not all_merged_clusters_df.empty:
+        # Lưu tất cả clusters (không chỉ filtered) để search hoạt động
+        if "movie" in all_merged_clusters_df.columns:
+            movie_df = all_merged_clusters_df[all_merged_clusters_df["movie"] == active_movie]
+        else:
+            movie_df = all_merged_clusters_df
+        
+        if not movie_df.empty:
+            per_movie_path = wh_parquet_dir / f"{active_movie}_clusters.parquet"
+            movie_df.to_parquet(per_movie_path, index=False)
+            print(f"[PostMerge] ✅ Saved PERSISTENT cluster data for '{active_movie}' -> {per_movie_path} ({len(movie_df)} rows)")
+        else:
+            print(f"[PostMerge] Warning: No data for movie '{active_movie}' in all_merged_clusters_df.")
 
-    # 2. Chuẩn hóa tên cột
+    # 2. Bảo vệ đầu vào - nhưng vẫn return per-movie đã được lưu ở trên
+    if core_clusters_df is None or core_clusters_df.empty:
+        print("[PostMerge] core_clusters_df is empty, skipping satellite assimilation but per-movie parquet was saved.")
+        return all_merged_clusters_df if all_merged_clusters_df is not None else pd.DataFrame()
+
+    # 3. Chuẩn hóa tên cột
     char_col = next((c for c in ["final_character_id", "cluster_id"] if c in all_merged_clusters_df.columns), None)
     if not char_col:
         print("[PostMerge] Missing ID column.")
@@ -108,25 +127,6 @@ def post_merge_task(
                 
                 print(f"[PostMerge] Assimilated {assimilated_count}/{len(satellite_clusters)} satellites into cores")
 
-
-        # 4. [CRITICAL] Lưu File Parquet Riêng Cho Từng Phim
-    active_movie = (os.getenv("FS_ACTIVE_MOVIE") or "").strip()
-
-    if active_movie:
-        # Lọc chỉ lấy dữ liệu của phim hiện tại
-        if "movie" in final_df.columns:
-            movie_final_df = final_df[final_df["movie"] == active_movie]
-        else:
-            # Fallback nếu không có cột movie
-            movie_final_df = final_df
-
-        if not movie_final_df.empty:
-            # File này sẽ tồn tại vĩnh viễn: warehouse/parquet/NHA_BA_NU_clusters.parquet
-            per_movie_path = wh_parquet_dir / f"{active_movie}_clusters.parquet"
-            movie_final_df.to_parquet(per_movie_path, index=False)
-            print(f"[PostMerge] ✅ Saved PERSISTENT cluster data for '{active_movie}' -> {per_movie_path}")
-        else:
-            print(f"[PostMerge] Warning: No data for movie '{active_movie}' to save.")
 
     # 5. Vẫn lưu file merged tổng tạm thời (cho các bước sau trong cùng pipeline dùng)
     merged_path = Path(storage.get("clusters_merged_parquet", "warehouse/parquet/clusters_merged.parquet"))

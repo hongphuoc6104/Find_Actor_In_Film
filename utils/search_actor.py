@@ -35,10 +35,11 @@ def _get_app() -> FaceAnalysis:
     if _APP is None:
         app = FaceAnalysis(name="buffalo_l")  # mặc định 512D
         # auto GPU nếu có, fallback CPU
+        # Use 416x416 for better small face detection
         try:
-            app.prepare(ctx_id=0, det_size=(640, 640))
+            app.prepare(ctx_id=0, det_size=(416, 416))
         except Exception:
-            app.prepare(ctx_id=-1, det_size=(640, 640))
+            app.prepare(ctx_id=-1, det_size=(416, 416))
         _APP = app
     return _APP
 
