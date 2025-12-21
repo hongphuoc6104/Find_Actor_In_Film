@@ -1,27 +1,37 @@
 """
 Evaluation Task - Stage 12 in Pipeline
 
-Evaluates clustering quality against ground truth labels from warehouse/labeled_faces.
-Uses embedding similarity matching instead of filename matching.
-Provides metrics for parameter tuning.
+Evaluates clustering quality using INTERNAL METRICS (unsupervised).
+Optional: Also matches labeled faces if warehouse/labeled_faces exists.
+
+Internal metrics computed:
+- Silhouette Score
+- Davies-Bouldin Index
+- Calinski-Harabasz Index
+- Dunn Index
+
+Visualizations generated:
+- UMAP 2D projection
+- Internal metrics bar chart
+- Cluster cohesion chart
+- Cluster composition matrix (if labeled faces available)
 """
 
 import json
 import os
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from prefect import task
-from insightface.app import FaceAnalysis
 
-from utils.evaluation import evaluate_clustering, print_metrics_summary
 from utils.visualization import (
-    plot_confusion_matrix,
+    compute_internal_metrics,
+    plot_umap_2d,
+    plot_internal_metrics_bar,
+    plot_cluster_cohesion_chart,
     plot_cluster_composition_matrix,
-    plot_metrics_comparison,
-    generate_markdown_report
+    print_internal_metrics_summary
 )
-from utils.dataset_validator import validate_labeled_faces_dataset
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -32,16 +42,16 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 @task(name="Evaluation")
 def evaluation_task(cfg: dict) -> Dict[str, float]:
     """
-    Evaluate clustering results against ground truth labels using embedding similarity.
+    Evaluate clustering results using INTERNAL METRICS (unsupervised).
     
     This task:
-    1. Loads ground truth from warehouse/labeled_faces/
-    2. Extracts embeddings from labeled faces images
-    3. Loads clustering results and their centroids
-    4. Matches labeled faces to clusters using cosine similarity
-    5. Computes 4 evaluation metrics
-    6. Generates visualizations and reports
-    7. Prints summary to console for immediate feedback
+    1. Loads clustering results from parquet
+    2. Computes internal metrics (Silhouette, DB, CH, Dunn)
+    3. Generates UMAP 2D visualization
+    4. Generates internal metrics bar chart
+    5. Generates cluster cohesion chart
+    6. (Optional) If labeled_faces exists, generates composition matrix
+    7. Prints summary to console
     
     Args:
         cfg: Config dictionary
@@ -49,134 +59,24 @@ def evaluation_task(cfg: dict) -> Dict[str, float]:
     Returns:
         Dict with evaluation metrics
     """
-    print("[Info] Starting clustering evaluation with embedding matching...")
+    print("[Info] Starting clustering evaluation with INTERNAL metrics...")
     
     # Get paths from config
     labeled_faces_path = cfg.get('evaluation', {}).get('labeled_faces_path', 'warehouse/labeled_faces')
     output_dir_base = cfg.get('evaluation', {}).get('output_dir', 'warehouse/evaluation')
-    characters_json = cfg.get('storage', {}).get('characters_json', 'warehouse/characters.json')
     clusters_parquet = cfg.get('storage', {}).get('clusters_merged_parquet', 'warehouse/parquet/clusters_merged.parquet')
     
-    # Get movie name from environment variable
+    # Get movie name
     movie_name = os.getenv('FS_ACTIVE_MOVIE', 'unknown')
     
-    # Create per-movie output directory: warehouse/evaluation/{MOVIE_NAME}/
+    # Create per-movie output directory
     output_dir = Path(output_dir_base) / movie_name
     output_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"[Info] Evaluation outputs will be saved to: {output_dir}")
     
-    # Validate labeled_faces dataset
-    print("[Info] Validating labeled faces dataset...")
-    validation_result = validate_labeled_faces_dataset(labeled_faces_path)
-    
-    if not validation_result['valid']:
-        print(f"[Error] Labeled faces dataset validation failed: {validation_result.get('error')}")
-        print("[Info] Skipping evaluation. Please fix dataset issues first.")
-        print("[Tip] Run: python3 utils/dataset_validator.py --dataset warehouse/labeled_faces")
-        return {}
-    
-    print(f"[Info] Found {validation_result['num_actors']} actors with {validation_result['total_images']} images")
-    
-    # Initialize face analysis for embedding extraction
-    print("[Info] Initializing face recognition model for embedding extraction...")
-    app = FaceAnalysis(
-        name=cfg.get('embedding', {}).get('model', 'buffalo_l'),
-        providers=cfg.get('embedding', {}).get('providers', ['CUDAExecutionProvider', 'CPUExecutionProvider'])
-    )
-    app.prepare(ctx_id=0, det_size=(640, 640))
-    
-    # Extract embeddings from labeled faces
-    print("[Info] Extracting embeddings from labeled faces...")
-    labeled_embeddings = []
-    labeled_actors = []
-    
-    detection_stats = {
-        'total_images': 0,
-        'successful': 0,
-        'no_face_detected': 0,
-        'read_error': 0,
-        'per_actor': {}
-    }
-    
-    import cv2
-    for actor in validation_result['actors']:
-        actor_name = actor['name']
-        actor_folder = Path(labeled_faces_path) / actor_name
-        actor_stats = {'total': 0, 'success': 0, 'failures': []}
-        
-        for img_file in actor_folder.glob('*'):
-            if img_file.suffix.lower() not in ['.jpg', '.jpeg', '.png', '.bmp', '.webp']:
-                continue
-            
-            detection_stats['total_images'] += 1
-            actor_stats['total'] += 1
-            
-            try:
-                # Read image
-                img = cv2.imread(str(img_file))
-                if img is None:
-                    detection_stats['read_error'] += 1
-                    actor_stats['failures'].append(f"{img_file.name}: read error")
-                    continue
-                
-                # Detect and get embedding
-                faces = app.get(img)
-                
-                # If no face detected, try with padding (for tight crops)
-                if len(faces) == 0:
-                    pad = 50
-                    padded_img = cv2.copyMakeBorder(
-                        img, pad, pad, pad, pad,
-                        cv2.BORDER_CONSTANT, value=[128, 128, 128]
-                    )
-                    faces = app.get(padded_img)
-                
-                if len(faces) > 0:
-                    # Take first face if multiple detected
-                    embedding = faces[0].normed_embedding
-                    labeled_embeddings.append(embedding)
-                    labeled_actors.append(actor_name)
-                    detection_stats['successful'] += 1
-                    actor_stats['success'] += 1
-                else:
-                    detection_stats['no_face_detected'] += 1
-                    actor_stats['failures'].append(f"{img_file.name}: no face detected (even with padding)")
-            except Exception as e:
-                detection_stats['read_error'] += 1
-                actor_stats['failures'].append(f"{img_file.name}: {str(e)[:50]}")
-                continue
-        
-        detection_stats['per_actor'][actor_name] = actor_stats
-    
-    # Print detailed detection report
-    print(f"\n{'='*60}")
-    print(f"📸 FACE DETECTION REPORT")
-    print(f"{'='*60}")
-    print(f"Total images processed: {detection_stats['total_images']}")
-    print(f"✅ Successful detections: {detection_stats['successful']}")
-    print(f"❌ No face detected: {detection_stats['no_face_detected']}")
-    print(f"❌ Read errors: {detection_stats['read_error']}")
-    print(f"\n👤 Per-actor breakdown:")
-    for actor, stats in detection_stats['per_actor'].items():
-        success_rate = (stats['success'] / stats['total'] * 100) if stats['total'] > 0 else 0
-        print(f"  • {actor}: {stats['success']}/{stats['total']} ({success_rate:.0f}%)")
-        if stats['failures'] and len(stats['failures']) <= 5:
-            for failure in stats['failures']:
-                print(f"    - {failure}")
-        elif stats['failures']:
-            print(f"    - {len(stats['failures'])} images failed detection")
-    print(f"{'='*60}\n")
-    
-    if len(labeled_embeddings) == 0:
-        print("[Error] No embeddings extracted from labeled faces!")
-        print("[Info] Check if images contain detectable faces.")
-        return {}
-    
-    print(f"[Info] Extracted {len(labeled_embeddings)} embeddings from labeled faces")
-    
-    # Load cluster centroids
-    print("[Info] Loading cluster centroids from parquet...")
+    # Load cluster data
+    print("[Info] Loading cluster data from parquet...")
     import pandas as pd
     
     try:
@@ -185,232 +85,263 @@ def evaluation_task(cfg: dict) -> Dict[str, float]:
         print(f"[Error] Failed to load clusters parquet: {e}")
         return {}
     
-    # Get current movie
-    movie = os.environ.get('FS_ACTIVE_MOVIE', 'unknown')
+    # Get current movie's data
     movie_meta = cfg.get('storage', {}).get('metadata_json', 'Data/metadata.json')
+    movie_id = None
     
-    # Load movie_id mapping
     try:
         with open(movie_meta, 'r', encoding='utf-8') as f:
             meta = json.load(f)
             movie_id_map = meta.get('movie_id_map', {})
-            movie_id = movie_id_map.get(movie, None)
+            movie_id = movie_id_map.get(movie_name, None)
     except:
-        movie_id = None
+        pass
     
-    if movie_id is None:
-        print(f"[Warning] Could not find movie_id for '{movie}'")
-        # Try to infer from clusters_df
-        if 'movie_id' in clusters_df.columns:
-            movie_id = clusters_df['movie_id'].iloc[0]
+    if movie_id is None and 'movie_id' in clusters_df.columns:
+        movie_id = clusters_df['movie_id'].iloc[0]
     
     # Filter to current movie
     if movie_id is not None and 'movie_id' in clusters_df.columns:
         clusters_df = clusters_df[clusters_df['movie_id'] == movie_id]
     
-    # Get unique clusters and their INDIVIDUAL EMBEDDINGS (not centroids)
-    print("[Info] Preparing individual face embeddings for matching...")
+    print(f"[Info] Loaded {len(clusters_df)} faces for movie '{movie_name}'")
     
-    if 'final_character_id' in clusters_df.columns:
-        cluster_col = 'final_character_id'
-    else:
-        cluster_col = 'cluster_id'
+    # Determine cluster column
+    cluster_col = 'final_character_id' if 'final_character_id' in clusters_df.columns else 'cluster_id'
     
-    # Build dict: cluster_id -> list of embeddings
-    cluster_embeddings = {}
-    for cluster_id, group in clusters_df.groupby(cluster_col):
-        # Get all embeddings (track centroids) in this cluster
-        embeddings = []
-        for emb in group['track_centroid'].values:
-            if emb is not None:
-                try:
-                    embeddings.append(np.array(emb))
-                except:
-                    continue
-        if len(embeddings) > 0:
-            cluster_embeddings[cluster_id] = embeddings
+    # Build embeddings and labels arrays
+    print("[Info] Preparing embeddings for internal metrics...")
     
-    print(f"[Info] Prepared {len(cluster_embeddings)} clusters with individual face embeddings")
+    embeddings_list = []
+    cluster_labels_list = []
+    cluster_embeddings = {}  # For cohesion chart
     
-    if len(cluster_embeddings) == 0:
-        print("[Error] No cluster embeddings available!")
+    # Map cluster IDs to integers for sklearn
+    unique_clusters = clusters_df[cluster_col].unique()
+    cluster_to_int = {cid: i for i, cid in enumerate(unique_clusters)}
+    
+    for _, row in clusters_df.iterrows():
+        emb = row.get('track_centroid')
+        cid = row[cluster_col]
+        
+        if emb is not None:
+            try:
+                emb_array = np.array(emb)
+                embeddings_list.append(emb_array)
+                cluster_labels_list.append(cluster_to_int[cid])
+                
+                # For cohesion chart
+                if cid not in cluster_embeddings:
+                    cluster_embeddings[cid] = []
+                cluster_embeddings[cid].append(emb_array)
+            except:
+                continue
+    
+    if len(embeddings_list) < 2:
+        print("[Error] Not enough embeddings for evaluation!")
         return {}
     
-    # Match labeled faces to clusters using BEST INDIVIDUAL FACE
-    print("[Info] Matching labeled faces to clusters using best individual face match...")
+    embeddings = np.array(embeddings_list)
+    cluster_labels = np.array(cluster_labels_list)
     
-    true_labels = []
-    pred_labels = []
-    match_details = []  # For debugging
+    print(f"[Info] Prepared {len(embeddings)} embeddings in {len(unique_clusters)} clusters")
     
-    for embedding, actor_name in zip(labeled_embeddings, labeled_actors):
-        # Find best matching INDIVIDUAL FACE across all clusters
-        best_cluster = None
-        best_similarity = -1.0
-        best_face_idx = -1
-        
-        for cluster_id, face_embeddings in cluster_embeddings.items():
-            # Compare with ALL faces in this cluster
-            for idx, face_emb in enumerate(face_embeddings):
-                similarity = cosine_similarity(embedding, face_emb)
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_cluster = cluster_id
-                    best_face_idx = idx
-        
-        # Use threshold 0.33 for better precision
-        if best_similarity > 0.33:  # Increased from 0.30
-            true_labels.append(actor_name)
-            pred_labels.append(best_cluster)
-            match_details.append({
-                'actor': actor_name,
-                'cluster': best_cluster,
-                'similarity': best_similarity,
-                'face_idx': best_face_idx
-            })
+    # =================================================================
+    # COMPUTE INTERNAL METRICS (KHÔNG CẦN NHÃN)
+    # =================================================================
+    print("[Info] Computing internal metrics...")
     
-    if len(true_labels) == 0:
-        print("[Warning] No matches found with similarity > 0.33")
-        print("[Info] This might indicate clustering quality issues.")
-        return {}
+    internal_metrics = compute_internal_metrics(embeddings, cluster_labels)
     
-    print(f"[Info] Matched {len(true_labels)} labeled faces to clusters")
+    # Print summary to console
+    print_internal_metrics_summary(internal_metrics, f"INTERNAL METRICS - {movie_name}")
     
-    # Print top matches for debugging
-    if match_details:
-        sorted_matches = sorted(match_details, key=lambda x: x['similarity'], reverse=True)
-        print("\n[Debug] Top 5 matches:")
-        for m in sorted_matches[:5]:
-            print(f"  {m['actor']} → {m['cluster']} (sim={m['similarity']:.3f})")
-
-    
-    print(f"[Info] Matched {len(true_labels)} labeled faces to clusters")
-    
-    # === REVERSE MATCHING: Cluster Composition Analysis ===
-    print("\n[Info] Performing reverse matching for cluster composition analysis...")
-    
-    cluster_face_labels = []  # Cluster ID for each face
-    matched_actor_labels = []  # Actor name or "Khác" for each face
-    
-    similarity_threshold = 0.33  # Increased for better precision
-    unknown_count = 0
-    
-    # For each cluster, match ALL its faces against labeled test embeddings
-    for cluster_id, face_embeddings in cluster_embeddings.items():
-        for face_idx, face_emb in enumerate(face_embeddings):
-            best_actor = None
-            best_similarity = -1.0
-            
-            # Compare with all labeled test embeddings
-            for test_emb, actor_name in zip(labeled_embeddings, labeled_actors):
-                similarity = cosine_similarity(face_emb, test_emb)
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_actor = actor_name
-            
-            # Assign label
-            cluster_face_labels.append(cluster_id)
-            if best_similarity > similarity_threshold:
-                matched_actor_labels.append(best_actor)
-            else:
-                matched_actor_labels.append("Khác")
-                unknown_count += 1
-    
-    print(f"[Info] Reverse matching complete:")
-    print(f"  - Total faces in clusters: {len(cluster_face_labels)}")
-    print(f"  - Matched to known actors: {len(cluster_face_labels) - unknown_count}")
-    print(f"  - Khác (supporting actors): {unknown_count}")
-    
-    # Print composition breakdown
-    from collections import Counter
-    actor_distribution = Counter(matched_actor_labels)
-    print("\n[Debug] Cluster composition by actor:")
-    for actor, count in actor_distribution.most_common():
-        percentage = (count / len(matched_actor_labels) * 100) if len(matched_actor_labels) > 0 else 0
-        print(f"  {actor}: {count} faces ({percentage:.1f}%)")
-    
-    # Compute metrics
-    print("[Info] Computing evaluation metrics...")
-    metrics = evaluate_clustering(true_labels, pred_labels)
-    
-    # Save results JSON
-    results_path = output_dir / 'results.json'
-    with open(results_path, 'w', encoding='utf-8') as f:
-        json.dump({
-            'metrics': metrics,
-            'dataset_info': {
-                'labeled_faces_path': labeled_faces_path,
-                'num_actors': validation_result['num_actors'],
-                'total_labeled_images': validation_result['total_images'],
-                'matched_embeddings': len(true_labels),
-                'num_clusters': len(cluster_embeddings)
-            },
-            'movie': movie,
-            'matching_method': 'embedding_similarity'
-        }, f, indent=2)
-    
-    print(f"[Info] Results saved to: {results_path}")
-    
-    # Generate visualizations
+    # =================================================================
+    # GENERATE VISUALIZATIONS
+    # =================================================================
     print("[Info] Generating visualizations...")
     
-    # Generate standard confusion matrix (test images → clusters)
-    confusion_matrix_path = output_dir / 'confusion_matrix.png'
-    plot_confusion_matrix(
-        true_labels,
-        pred_labels,
-        str(confusion_matrix_path),
-        title=f"Clustering Confusion Matrix ({len(true_labels)} matches)"
+    # 1. UMAP 2D projection
+    umap_path = output_dir / 'umap_projection.png'
+    try:
+        plot_umap_2d(
+            embeddings,
+            cluster_labels,
+            str(umap_path),
+            title=f"UMAP Projection - {movie_name}"
+        )
+    except Exception as e:
+        print(f"[Warning] UMAP visualization failed: {e}")
+    
+    # 2. Internal metrics bar chart
+    metrics_bar_path = output_dir / 'internal_metrics.png'
+    plot_internal_metrics_bar(
+        internal_metrics,
+        str(metrics_bar_path),
+        title=f"Chỉ Số Phân Cụm - {movie_name}"
     )
     
-    # Generate cluster composition matrix (clusters → actors + unknown)
-    composition_matrix_path = output_dir / 'cluster_composition.png'
+    # 3. Cluster cohesion chart
+    cohesion_path = output_dir / 'cluster_cohesion.png'
+    plot_cluster_cohesion_chart(
+        list(clusters_df[cluster_col]),
+        cluster_embeddings,
+        str(cohesion_path),
+        title=f"Độ Đồng Nhất Cụm - {movie_name}"
+    )
+    
+    # =================================================================
+    # OPTIONAL: LABELED FACES MATCHING (NẾU CÓ DỮ LIỆU NHÃN)
+    # =================================================================
+    labeled_faces_available = Path(labeled_faces_path).exists() and any(Path(labeled_faces_path).iterdir())
+    
+    if labeled_faces_available:
+        print("\n[Info] Found labeled_faces directory. Generating composition analysis...")
+        
+        try:
+            composition_result = _generate_composition_analysis(
+                cfg, clusters_df, cluster_col, cluster_embeddings, 
+                labeled_faces_path, output_dir
+            )
+            if composition_result:
+                internal_metrics['composition_analysis'] = True
+        except Exception as e:
+            print(f"[Warning] Composition analysis failed: {e}")
+            internal_metrics['composition_analysis'] = False
+    else:
+        print("[Info] No labeled_faces found. Skipping composition analysis.")
+        internal_metrics['composition_analysis'] = False
+    
+    # =================================================================
+    # SAVE RESULTS
+    # =================================================================
+    results_path = output_dir / 'results.json'
+    
+    results = {
+        'movie': movie_name,
+        'internal_metrics': {
+            'silhouette': internal_metrics.get('silhouette'),
+            'davies_bouldin': internal_metrics.get('davies_bouldin'),
+            'calinski_harabasz': internal_metrics.get('calinski_harabasz'),
+            'dunn_index': internal_metrics.get('dunn_index'),
+            'mean_intra_cluster_distance': internal_metrics.get('mean_intra_cluster_distance')
+        },
+        'dataset_info': {
+            'num_faces': internal_metrics.get('num_samples'),
+            'num_clusters': internal_metrics.get('num_clusters')
+        },
+        'composition_analysis_available': internal_metrics.get('composition_analysis', False),
+        'visualizations': {
+            'umap_projection': str(umap_path),
+            'internal_metrics_chart': str(metrics_bar_path),
+            'cluster_cohesion': str(cohesion_path)
+        }
+    }
+    
+    with open(results_path, 'w', encoding='utf-8') as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+    
+    print(f"\n[Info] ✅ Evaluation complete! Results saved to: {results_path}")
+    
+    return internal_metrics
+
+
+def _generate_composition_analysis(
+    cfg: dict,
+    clusters_df,
+    cluster_col: str,
+    cluster_embeddings: dict,
+    labeled_faces_path: str,
+    output_dir: Path
+) -> bool:
+    """
+    Phân tích thành phần cụm dựa trên dữ liệu nhãn.
+    
+    Chỉ chạy khi có thư mục labeled_faces.
+    """
+    from utils.dataset_validator import validate_labeled_faces_dataset
+    from insightface.app import FaceAnalysis
+    import cv2
+    
+    # Validate labeled faces
+    validation = validate_labeled_faces_dataset(labeled_faces_path)
+    if not validation['valid']:
+        print(f"[Warning] Labeled faces validation failed: {validation.get('error')}")
+        return False
+    
+    print(f"[Info] Found {validation['num_actors']} actors with {validation['total_images']} labeled images")
+    
+    # Initialize face model
+    app = FaceAnalysis(
+        name=cfg.get('embedding', {}).get('model', 'buffalo_l'),
+        providers=cfg.get('embedding', {}).get('providers', ['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    )
+    app.prepare(ctx_id=0, det_size=(640, 640))
+    
+    # Extract embeddings from labeled faces
+    labeled_embeddings = []
+    labeled_actors = []
+    
+    for actor in validation['actors']:
+        actor_name = actor['name']
+        actor_folder = Path(labeled_faces_path) / actor_name
+        
+        for img_file in actor_folder.glob('*'):
+            if img_file.suffix.lower() not in ['.jpg', '.jpeg', '.png', '.bmp', '.webp']:
+                continue
+            
+            try:
+                img = cv2.imread(str(img_file))
+                if img is None:
+                    continue
+                
+                faces = app.get(img)
+                
+                # Retry with padding
+                if len(faces) == 0:
+                    pad = 50
+                    padded = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=[128, 128, 128])
+                    faces = app.get(padded)
+                
+                if len(faces) > 0:
+                    labeled_embeddings.append(faces[0].normed_embedding)
+                    labeled_actors.append(actor_name)
+            except:
+                continue
+    
+    if len(labeled_embeddings) == 0:
+        print("[Warning] No embeddings extracted from labeled faces")
+        return False
+    
+    print(f"[Info] Extracted {len(labeled_embeddings)} embeddings from labeled faces")
+    
+    # Match cluster faces to labeled actors
+    cluster_face_labels = []
+    matched_actor_labels = []
+    similarity_threshold = 0.33
+    
+    for cluster_id, face_embs in cluster_embeddings.items():
+        for face_emb in face_embs:
+            best_actor = None
+            best_sim = -1.0
+            
+            for test_emb, actor_name in zip(labeled_embeddings, labeled_actors):
+                sim = cosine_similarity(face_emb, test_emb)
+                if sim > best_sim:
+                    best_sim = sim
+                    best_actor = actor_name
+            
+            cluster_face_labels.append(cluster_id)
+            matched_actor_labels.append(best_actor if best_sim > similarity_threshold else "Khác")
+    
+    # Generate composition matrix
+    composition_path = output_dir / 'cluster_composition.png'
     plot_cluster_composition_matrix(
         cluster_face_labels,
         matched_actor_labels,
         cluster_embeddings,
-        str(composition_matrix_path),
-        title=f"Cluster Composition Matrix ({len(cluster_face_labels)} faces)"
+        str(composition_path),
+        title="Thành Phần Cụm"
     )
     
-    # Generate cluster cohesion chart (separate file)
-    cohesion_chart_path = output_dir / 'cluster_cohesion.png'
-    from utils.visualization import plot_cluster_cohesion_chart
-    plot_cluster_cohesion_chart(
-        cluster_face_labels,
-        cluster_embeddings,
-        str(cohesion_chart_path),
-        title="Cluster Cohesion Analysis"
-    )
-    
-    metrics_chart_path = output_dir / 'metrics_chart.png'
-    plot_metrics_comparison(
-        metrics,
-        str(metrics_chart_path),
-        title="Clustering Evaluation Metrics"
-    )
-    
-    # Generate report
-    print("[Info] Generating evaluation report...")
-    report_path = output_dir / 'report.md'
-    
-    additional_info = {
-        'movie': movie,
-        'profile': 'auto',
-        'matched_images': len(true_labels),
-        'total_labeled': validation_result['total_images'],
-        'num_clusters': len(cluster_embeddings)
-    }
-    
-    generate_markdown_report(
-        metrics,
-        true_labels,
-        pred_labels,
-        str(report_path),
-        additional_info
-    )
-    
-    # Print summary to console
-    print_metrics_summary(metrics)
-    
-    return metrics
+    return True
