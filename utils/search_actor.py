@@ -90,15 +90,28 @@ def _read_image(path: str) -> Optional[np.ndarray]:
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 
-def _detect_best_face(app: FaceAnalysis, img: np.ndarray) -> Optional[np.ndarray]:
+class FaceNotFoundError(Exception):
+    """Raised when no valid human face is detected in the image"""
+    pass
+
+
+def _detect_best_face(app: FaceAnalysis, img: np.ndarray, min_det_score: float = 0.5) -> Optional[np.ndarray]:
     """
     Trả về embedding tốt nhất trong ảnh (chọn khuôn mặt có score cao nhất).
+    Raises FaceNotFoundError nếu không tìm thấy khuôn mặt hợp lệ.
     """
     faces = app.get(img)
     if not faces:
-        return None
+        raise FaceNotFoundError("Không tìm thấy khuôn mặt trong ảnh. Vui lòng tải ảnh có khuôn mặt rõ ràng.")
+    
     # chọn face có det_score cao nhất
     best = max(faces, key=lambda f: float(getattr(f, "det_score", 0.0)))
+    det_score = float(getattr(best, "det_score", 0.0))
+    
+    # Check if detection score is too low (likely not a human face)
+    if det_score < min_det_score:
+        raise FaceNotFoundError(f"Không phát hiện khuôn mặt người hợp lệ (score: {det_score:.2f}). Vui lòng tải ảnh khuôn mặt rõ ràng hơn.")
+    
     # best.normed_embedding là 512D đã chuẩn hóa, nếu không có thì dùng embedding thường
     if hasattr(best, "normed_embedding") and best.normed_embedding is not None:
         return np.array(best.normed_embedding, dtype=np.float32)
@@ -200,16 +213,21 @@ def search_actor(
       ...
     }
     Chỉ giữ các kết quả có similarity >= score_floor.
+    
+    Raises:
+        FaceNotFoundError: Nếu không tìm thấy khuôn mặt người hợp lệ trong ảnh
     """
     app = _get_app()
 
     # 1) embedding ảnh truy vấn
     q_img = _read_image(image_path)
     if q_img is None:
-        return {}
+        raise FaceNotFoundError("Không thể đọc file ảnh. Vui lòng kiểm tra lại.")
+    
+    # This will raise FaceNotFoundError if no valid face found
     q_emb = _detect_best_face(app, q_img)
     if q_emb is None:
-        return {}
+        raise FaceNotFoundError("Không thể tạo embedding từ ảnh.")
 
     # 2) load prototypes từ characters.json
     protos, raw_chars = _load_characters_json()

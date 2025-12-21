@@ -1,0 +1,13 @@
+Bước 1: Chạy pipeline trên 5 video thử nghiệm
+         ↓
+Bước 2: Thu thập metrics (Silhouette, DB, CH, Dunn)
+         ↓
+Bước 3: Vẽ biểu đồ UMAP 2D
+         ↓
+Bước 4: Chụp screenshot giao diện web (nếu có)
+         ↓
+Bước 5: Điền số liệu vào bảng Chương 4
+         ↓
+Bước 6: Viết thảo luận (Discussion) dựa trên kết quả thực tế
+         ↓
+Bước 7: Rà soát lại Chương 5 (nếu kết quả khác kỳ vọng)

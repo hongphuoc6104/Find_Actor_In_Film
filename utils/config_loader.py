@@ -143,57 +143,75 @@ def _env_int(key: str, default: Optional[int]) -> Optional[int]:
 
 
 # =============================================================================
-# --- BỘ NÃO TỰ ĐỘNG TINH CHỈNH PHIÊN BẢN HOÀN CHỈNH ---
+# --- BỘ NÃO TỰ ĐỘNG TINH CHỈNH PHIÊN BẢN MỚI ---
 # =============================================================================
 
 def generate_auto_profile(
         cfg: Dict[str, Any],
-        video_profile: Dict[str, str]
+        video_profile: Dict[str, str],
+        duration_seconds: Optional[float] = None
 ) -> Dict[str, Any]:
     """
-    Dựa trên Video Profile và các quy tắc trong config.yaml,
-    tạo ra một bộ tham số ghi đè.
+    Dựa trên Video Profile và duration, tạo ra bộ tham số ghi đè.
+    
+    Ưu tiên: duration_presets (nếu có duration_seconds) > legacy rules
     """
     overrides = {}
     auto_tuning_cfg = cfg.get("auto_tuning", {})
-    rules = auto_tuning_cfg.get("rules", [])
-
+    
     print("\n--- Applying Auto-Tuning Rules ---")
-    # 1. Áp dụng các quy tắc từ config.yaml (giữ nguyên logic cũ)
+    
+    # === NEW: DURATION-BASED PRESETS (ưu tiên cao nhất) ===
+    duration_presets = auto_tuning_cfg.get("duration_presets", {})
+    
+    if duration_seconds is not None and duration_presets:
+        # Tìm preset phù hợp với duration
+        matched_preset = None
+        matched_name = None
+        
+        # Sắp xếp theo max_duration tăng dần
+        sorted_presets = sorted(
+            duration_presets.items(),
+            key=lambda x: x[1].get("max_duration", 0)
+        )
+        
+        for preset_name, preset_cfg in sorted_presets:
+            max_dur = preset_cfg.get("max_duration", 0)
+            if duration_seconds <= max_dur:
+                matched_preset = preset_cfg
+                matched_name = preset_name
+                break
+        
+        if matched_preset:
+            # Extract overrides từ preset (loại bỏ max_duration)
+            preset_overrides = {k: v for k, v in matched_preset.items() if k != "max_duration"}
+            duration_mins = int(duration_seconds // 60)
+            print(f"[AutoTuning] Duration: {duration_mins} phút → Preset: '{matched_name}'")
+            print(f"[AutoTuning] Applying: {preset_overrides}")
+            overrides = deep_merge(overrides, preset_overrides)
+            return overrides  # Dùng preset, bỏ qua legacy rules
+    
+    # === LEGACY: Rules cũ (fallback nếu không có duration) ===
+    rules = auto_tuning_cfg.get("rules", [])
     for i, rule in enumerate(rules):
         conditions = rule.get("conditions", {})
         if not conditions: continue
-
-        # Logic match: tất cả conditions phải khớp với video_profile
+        
         is_match = all(video_profile.get(key) == value for key, value in conditions.items())
-
         if is_match:
             rule_overrides = rule.get("overrides", {})
-            print(f"[AutoTuning] Rule matched: {conditions} -> Applying overrides: {rule_overrides}")
+            print(f"[AutoTuning] Legacy rule matched: {conditions}")
             overrides = deep_merge(overrides, rule_overrides)
-
-    # 2. LOGIC MỚI: Đọc quy tắc min_size từ config
+    
+    # === LEGACY: min_size_rules (fallback) ===
     min_size_rules = auto_tuning_cfg.get("min_size_rules", {})
-    duration_base_map = min_size_rules.get("duration_base", {"Short": 3, "Medium": 5, "Long": 7})
-    complexity_adj_map = min_size_rules.get("complexity_adjustment", {"Crowded": 1.5})
-
-    duration_cat = video_profile.get("duration", "Medium")
-    complexity_cat = video_profile.get("complexity")
-
-    # Lấy ngưỡng cơ bản từ map
-    final_min_size = duration_base_map.get(duration_cat, 5)
-
-    # Điều chỉnh nếu phim đông đúc
-    if complexity_cat and complexity_cat in complexity_adj_map:
-        adjustment_factor = complexity_adj_map[complexity_cat]
-        final_min_size = int(final_min_size * adjustment_factor)
-        print(
-            f"[AutoTuning] Video is {complexity_cat} -> Adjusting `min_size` up by {adjustment_factor}x to {final_min_size}.")
-
-    print(
-        f"[AutoTuning] Final `min_size` decided: {final_min_size} (based on duration='{duration_cat}', complexity='{complexity_cat}')")
-    overrides = deep_merge(overrides, {"filter_clusters": {"min_size": final_min_size}})
-
+    if min_size_rules:
+        duration_base_map = min_size_rules.get("duration_base", {})
+        duration_cat = video_profile.get("duration", "Medium")
+        final_min_size = duration_base_map.get(duration_cat, 15)
+        print(f"[AutoTuning] Legacy min_size: {final_min_size}")
+        overrides = deep_merge(overrides, {"filter_clusters": {"min_size": final_min_size}})
+    
     return overrides
 
 
@@ -201,18 +219,22 @@ def apply_preset(
         cfg: Dict[str, Any],
         video_profile: Optional[Dict[str, str]] = None,
         custom_knobs: Optional[Dict[str, Any]] = None,
+        duration_seconds: Optional[float] = None,
         **kwargs
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Áp dụng các lớp cấu hình theo thứ tự ưu tiên.
     Priority (cao → thấp): ENV vars -> custom_knobs -> auto_profile -> base config
+    
+    Args:
+        duration_seconds: Độ dài video (giây) để áp dụng duration_presets
     """
     merged = deepcopy(cfg)
     profile_key = "auto_tuned"
 
-    # Lớp 1 (thấp nhất): Cấu hình tự động
+    # Lớp 1 (thấp nhất): Cấu hình tự động (dựa trên duration)
     if video_profile:
-        auto_profile_overrides = generate_auto_profile(merged, video_profile)
+        auto_profile_overrides = generate_auto_profile(merged, video_profile, duration_seconds)
         merged = deep_merge(merged, auto_profile_overrides)
 
     # Lớp 2: Knobs tùy chỉnh cho từng phim

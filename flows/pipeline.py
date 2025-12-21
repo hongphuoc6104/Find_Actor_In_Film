@@ -30,7 +30,7 @@ from tasks.evaluation_task import evaluation_task
 from utils.config_loader import load_config, load_video_config, apply_preset, load_movie_metadata, deep_merge
 
 
-def banner(msg: str):
+def _banner(msg: str):
     print("\n" + "=" * 70 + f"\n  {msg}\n" + "=" * 70 + "\n")
 
 
@@ -53,7 +53,7 @@ def face_clustering_pipeline(
     # Helper to conditionally print banners
     def banner(msg: str):
         if not quiet:
-            banner(msg)
+            _banner(msg)
     
     # Load base config with video-specific overrides (if exists)
     base_cfg = load_video_config(active_movie)
@@ -74,9 +74,25 @@ def face_clustering_pipeline(
     video_profile = analyze_video_task(movie_title=active_movie)
 
 
-    # Apply Config
+    # Apply Config with duration-based auto-tuning
     movie_meta = load_movie_metadata(active_movie, base_cfg)
-    profile_key, cfg = apply_preset(base_cfg, video_profile, movie_meta.get("custom_knobs"))
+    
+    # Get duration for auto-tuning presets
+    duration_seconds = None
+    try:
+        from utils.config_loader import get_video_duration
+        duration_seconds = get_video_duration(active_movie, base_cfg)
+        if duration_seconds:
+            print(f"[Info] Video duration: {int(duration_seconds // 60)}:{int(duration_seconds % 60):02d}")
+    except Exception:
+        pass
+    
+    profile_key, cfg = apply_preset(
+        base_cfg, 
+        video_profile, 
+        movie_meta.get("custom_knobs"),
+        duration_seconds=duration_seconds
+    )
     print(f"[Info] Applied Profile: {profile_key}")
 
 
