@@ -1,0 +1,118 @@
+# ===========================================
+# FACE CLUSTERING PROJECT - GITIGNORE
+# ===========================================
+
+# ----------------------
+# Virtual Environments
+# ----------------------
+.venv/
+.venv1/
+env/
+venv/
+*.egg-info/
+
+# ----------------------
+# IDE / Editors
+# ----------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ----------------------
+# Documentation (auto-generated)
+# ----------------------
+docs/
+
+# ----------------------
+# Data & Heavy Files (DVC tracked)
+# ----------------------
+# Keep folder structure, ignore contents (except .gitkeep)
+Data/video/*
+!Data/video/.gitkeep
+Data/frames/*
+!Data/frames/.gitkeep
+Data/face_crops/*
+!Data/face_crops/.gitkeep
+Data/embeddings/*
+!Data/embeddings/.gitkeep
+Data/metadata.json
+
+models/
+*.h5
+*.pt
+*.ckpt
+*.onnx
+*.npz
+*.joblib
+
+# ----------------------
+# Warehouse (keep structure, ignore data)
+# ----------------------
+warehouse/parquet/*
+!warehouse/parquet/.gitkeep
+warehouse/cluster_previews/*
+!warehouse/cluster_previews/.gitkeep
+warehouse/evaluation/*
+!warehouse/evaluation/.gitkeep
+warehouse/labeled_faces/*
+!warehouse/labeled_faces/.gitkeep
+warehouse/characters.json
+
+# ----------------------
+# Reports & Logs (regenerable)
+# ----------------------
+reports/
+logs/
+*.log
+debug/
+
+# ----------------------
+# Python Cache
+# ----------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# ----------------------
+# Notebook
+# ----------------------
+.ipynb_checkpoints/
+
+# ----------------------
+# Temp Files
+# ----------------------
+temp_uploads/
+*.tmp
+*.temp
+
+# ----------------------
+# System Files
+# ----------------------
+.DS_Store
+Thumbs.db
+
+# ----------------------
+# Poster Images (optional - for thesis)
+# ----------------------
+poster_images/
+Pts.png
+poster_nghien_cuu.png
+
+# ----------------------
+# Frontend Build
+# ----------------------
+frontend-client/node_modules/
+frontend-client/.next/
+frontend-client/dist/
+frontend-client/build/
+
+# ----------------------
+# DVC (data version control)
+# ----------------------
+*.dvc
+.dvc/cache/
+.dvc/tmp/

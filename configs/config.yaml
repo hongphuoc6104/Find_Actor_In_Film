@@ -1,0 +1,171 @@
+# =========================
+# Face Search – CONFIG YAML (TUNED VERSION + LABELING)
+# =========================
+seed: 42
+
+# -------------------------
+# CÁC ĐƯỜNG DẪN LƯU TRỮ
+# -------------------------
+storage:
+  video_root: "Data/video"
+  frames_root: "Data/frames"
+  face_crops_root: "Data/face_crops"
+  metadata_json: "Data/metadata.json"
+  embeddings_folder_per_movie: "Data/embeddings"
+  warehouse_embeddings: "warehouse/parquet/embeddings.parquet"
+  warehouse_clusters: "warehouse/parquet/clusters.parquet"
+  clusters_merged_parquet: "warehouse/parquet/clusters_merged.parquet"
+  centroids_parquet: "warehouse/parquet/centroids.parquet"
+  cluster_previews_root: "warehouse/cluster_previews"
+  characters_json: "warehouse/characters.json"
+
+  # Thư mục chứa ảnh mẫu để gán nhãn thủ công
+  labeled_faces_root: "warehouse/labeled_faces"
+
+# -------------------------
+# CẤU HÌNH NHẬN DIỆN (EMBEDDING)
+# -------------------------
+embedding:
+  model: "buffalo_l"
+  l2_normalize: true
+  providers: ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+pca:
+  enable: false
+
+# =====================================================================
+# CÁC THAM SỐ MẶC ĐỊNH (Baseline)
+# =====================================================================
+clustering:
+  algo: "agglomerative"
+  metric: "cosine"
+  linkage: "complete"
+  distance_threshold:
+    default: 1.15
+
+merge:
+  within_movie_threshold: 0.55
+
+post_merge:
+  enable: true
+  metric: "cosine"
+  distance_threshold: 0.60
+
+filter_clusters:
+  min_size: 5  # Optimal - tested iterations 1 (15) vs 2 (20), 15 performs better
+
+quality_filters:
+  enable: true
+  min_det_score: 0.45
+  min_blur_clarity: 40.0
+  min_face_size: 50
+  landmark_quality_filter:
+    enable: true
+    min_score_hard_cutoff: 0.55  # Chỉ nhận faces >= 70% visibility (yaw < 30°)
+    min_score_for_core: 0.70
+
+# Cấu hình tìm kiếm nhận diện (khi user upload ảnh để search)
+search:
+  confident_threshold: 0.35
+  margin_threshold: 0.08
+  max_results: 20
+
+# -------------------------
+# CẤU HÌNH GÁN NHÃN TỰ ĐỘNG (AUTO-LABELING)
+# -------------------------
+labeling:
+  enable: true
+  # Ngưỡng Similarity (Cosine) để chấp nhận gán nhãn
+  # Ví dụ: 0.55 nghĩa là cụm trong phim phải giống ảnh mẫu ít nhất 55%
+  similarity_threshold: 0.55
+
+# =====================================================================
+# CÁC CẤU HÌNH KHÁC
+# =====================================================================
+preview:
+  source: "frames"
+  max_images_per_cluster: 25
+
+filter:
+  min_track_size: 3
+  min_cluster_size: 3  # Optimal after testing (15 better than 20)
+
+tracklet:
+  max_age: 3
+  iou_threshold: 0.28
+
+# =====================================================================
+# EVALUATION (For parameter tuning with ground truth)
+# =====================================================================
+evaluation:
+  enable: true
+  labeled_faces_path: "warehouse/labeled_faces"
+  output_dir: "warehouse/evaluation"
+  visualizations:
+    confusion_matrix: true
+    metrics_bar_chart: true
+  metrics:
+    - purity
+    - nmi
+    - ari
+    - bcubed_f1
+
+# =====================================================================
+# --- BỘ NÃO TỰ ĐỘNG TINH CHỈNH (Dựa trên 10 phim đã tune) ---
+# =====================================================================
+# Quy tắc: Video có config riêng (configs/videos/*.yaml) sẽ override tất cả
+# Logic áp dụng theo độ dài video (duration_seconds từ metadata)
+
+auto_tuning:
+  # === DURATION-BASED RULES (áp dụng cho video mới) ===
+  # Mở rộng thêm ultra_short cho video YouTube ngắn (MV, clip)
+  
+  duration_presets:
+    ultra_short:  # < 5 phút (MV, YouTube clips, trailers)
+      max_duration: 300
+      filter_clusters:
+        min_size: 2  # Rất thấp để giữ được khuôn mặt
+      filter:
+        min_track_size: 1  # Cho phép track có 1 face (scene cắt nhanh)
+        min_cluster_size: 2
+      clustering:
+        distance_threshold:
+          default: 0.60  # Rất chặt để tránh merge nhầm
+      quality_filters:
+        min_det_score: 0.30  # Nới lỏng để detect nhiều hơn
+        min_blur_clarity: 25.0
+        min_face_size: 35
+          
+    very_short:  # 5-10 phút
+      max_duration: 600
+      filter_clusters:
+        min_size: 4
+      filter:
+        min_track_size: 2
+      clustering:
+        distance_threshold:
+          default: 0.65
+          
+    short:  # 10-20 phút
+      max_duration: 1200
+      filter_clusters:
+        min_size: 10
+      clustering:
+        distance_threshold:
+          default: 0.80
+          
+    medium:  # 20-40 phút
+      max_duration: 2400
+      filter_clusters:
+        min_size: 15
+      # Dùng distance_threshold mặc định
+      
+    long:  # 40-80 phút
+      max_duration: 4800
+      filter_clusters:
+        min_size: 20
+        
+    very_long:  # > 80 phút
+      max_duration: 999999
+      filter_clusters:
+        min_size: 25

@@ -1,0 +1,5 @@
+# Video-specific config for: TAMCAM
+# Optimal: min_size=25 (tested: 12 clusters, Purity 0.48)
+
+filter_clusters:
+  min_size: 25  # Optimal for long film

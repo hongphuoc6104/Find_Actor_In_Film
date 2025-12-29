@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS bổ sung nếu cần */
+body {
+    background-color: #050505;
+    color: #ffffff;
+}

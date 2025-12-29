@@ -1,0 +1,5 @@
+# Video-specific config for: Nang2
+# Optimal: min_size=20 (tested: 6 clusters, Purity 0.41)
+
+filter_clusters:
+  min_size: 20  # Optimal for medium film

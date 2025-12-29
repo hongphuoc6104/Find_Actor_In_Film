@@ -1,0 +1,5 @@
+# Video-specific config for: NGUOIVOCUOICUNG
+# Optimal: min_size=25 (tested: 10 clusters, Purity 0.44)
+
+filter_clusters:
+  min_size: 25  # Optimal for long film

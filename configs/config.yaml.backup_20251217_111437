@@ -1,0 +1,196 @@
+# =========================
+# Face Search – CONFIG YAML (TUNED VERSION + LABELING)
+# =========================
+seed: 42
+
+# -------------------------
+# CÁC ĐƯỜNG DẪN LƯU TRỮ
+# -------------------------
+storage:
+  video_root: "Data/video"
+  frames_root: "Data/frames"
+  face_crops_root: "Data/face_crops"
+  metadata_json: "Data/metadata.json"
+  embeddings_folder_per_movie: "Data/embeddings"
+  warehouse_embeddings: "warehouse/parquet/embeddings.parquet"
+  warehouse_clusters: "warehouse/parquet/clusters.parquet"
+  clusters_merged_parquet: "warehouse/parquet/clusters_merged.parquet"
+  centroids_parquet: "warehouse/parquet/centroids.parquet"
+  cluster_previews_root: "warehouse/cluster_previews"
+  characters_json: "warehouse/characters.json"
+
+  # Thư mục chứa ảnh mẫu để gán nhãn thủ công
+  labeled_faces_root: "warehouse/labeled_faces"
+
+# -------------------------
+# CẤU HÌNH NHẬN DIỆN (EMBEDDING)
+# -------------------------
+embedding:
+  model: "buffalo_l"
+  l2_normalize: true
+  providers: ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+pca:
+  enable: false
+
+# =====================================================================
+# CÁC THAM SỐ MẶC ĐỊNH (Baseline)
+# =====================================================================
+clustering:
+  algo: "agglomerative"
+  metric: "cosine"
+  linkage: "complete"
+  distance_threshold:
+    default: 1.15
+
+merge:
+  within_movie_threshold: 0.55
+
+post_merge:
+  enable: true
+  metric: "cosine"
+  distance_threshold: 0.60
+
+filter_clusters:
+  min_size: 5
+
+quality_filters:
+  enable: true
+  min_det_score: 0.45
+  min_blur_clarity: 40.0
+  min_face_size: 50
+  landmark_quality_filter:
+    enable: true
+    min_score_hard_cutoff: 0.55  # Chỉ nhận faces >= 70% visibility (yaw < 30°)
+    min_score_for_core: 0.70
+
+# Cấu hình tìm kiếm nhận diện (khi user upload ảnh để search)
+search:
+  confident_threshold: 0.65
+  margin_threshold: 0.08
+  max_results: 20
+
+# -------------------------
+# CẤU HÌNH GÁN NHÃN TỰ ĐỘNG (AUTO-LABELING)
+# -------------------------
+labeling:
+  enable: true
+  # Ngưỡng Similarity (Cosine) để chấp nhận gán nhãn
+  # Ví dụ: 0.55 nghĩa là cụm trong phim phải giống ảnh mẫu ít nhất 55%
+  similarity_threshold: 0.55
+
+# =====================================================================
+# CÁC CẤU HÌNH KHÁC
+# =====================================================================
+preview:
+  source: "frames"
+  max_images_per_cluster: 25
+
+filter:
+  min_track_size: 3
+  min_cluster_size: 5
+
+tracklet:
+  max_age: 3
+  iou_threshold: 0.28
+
+# =====================================================================
+# EVALUATION (For parameter tuning with ground truth)
+# =====================================================================
+evaluation:
+  enable: true
+  labeled_faces_path: "warehouse/labeled_faces"
+  output_dir: "warehouse/evaluation"
+  visualizations:
+    confusion_matrix: true
+    metrics_bar_chart: true
+  metrics:
+    - purity
+    - nmi
+    - ari
+    - bcubed_f1
+
+# =====================================================================
+# --- BỘ NÃO TỰ ĐỘNG TINH CHỈNH ---
+# =====================================================================
+auto_tuning:
+  min_size_rules:
+    duration_base:
+      Short: 15       # Was 10 → Increased to reduce small clusters
+      Medium: 40      # Was 25 → Increased significantly  
+      Long: 80        # Was 40 → Doubled to keep only main actors
+    complexity_adjustment:
+      Crowded: 1.5
+
+  rules:
+    # === RULE CHUNG (áp dụng trước) ===
+    - conditions:
+        clarity: "Blurry"
+      overrides:
+        quality_filters:
+          min_blur_clarity: 25.0
+          min_det_score: 0.50
+        clustering:
+          distance_threshold:
+            default: 0.9
+        merge:
+          within_movie_threshold: 0.45
+        post_merge:
+          distance_threshold: 0.60  # Chuẩn cho EMCHUA18
+
+    # === RULE CỤ THỂ (áp dụng sau, đè lên rule chung) ===
+    - conditions:
+        lighting: "Dark"
+        clarity: "Blurry"
+      overrides:
+        quality_filters:
+          min_det_score: 0.30
+          min_blur_clarity: 20.0
+          min_face_size: 40
+        clustering:
+          distance_threshold:
+            default: 0.90  # Giữ lỏng để có nhiều dữ liệu cho merge
+        merge:
+          within_movie_threshold: 0.45  # bị lẻ
+        post_merge:
+          distance_threshold: 0.70  # gộp chung
+
+    # === RULE CHO DARK + NORMAL (CHUYENXOMTUI) ===
+    - conditions:
+        lighting: "Dark"
+        clarity: "Normal"
+      overrides:
+        quality_filters:
+          min_det_score: 0.45
+          min_blur_clarity: 40.0
+        clustering:
+          distance_threshold:
+            default: 0.90  # Chặt hơn (từ 0.85) để tránh gộp nhầm nhiều người
+        merge:
+          within_movie_threshold: 0.45  # Tăng (từ 0.50) để KHÔNG merge clusters khác người
+        post_merge:
+          distance_threshold: 0.60  # Giảm (từ 0.65) để ít assimilate hơn
+
+    - conditions:
+        lighting: "Bright"
+        clarity: "Sharp"
+        complexity: "Sparse"
+      overrides:
+        quality_filters:
+          min_det_score: 0.70
+          min_blur_clarity: 80.0
+          min_face_size: 80
+        clustering:
+          distance_threshold:
+            default: 0.95
+        merge:
+          within_movie_threshold: 0.6
+
+
+    - conditions:
+        lighting: "Dark"
+        clarity: "Sharp"
+      overrides:
+        quality_filters:
+          min_det_score: 0.35
+          min_blur_clarity: 50.0

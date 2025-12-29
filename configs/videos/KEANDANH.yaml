@@ -1,0 +1,5 @@
+# Video-specific config for: KEANDANH
+# Optimal: min_size=30 (tested: 15 clusters - can't reduce further)
+
+filter_clusters:
+  min_size: 30  # Max tested - clustering limit reached

@@ -1,0 +1,25 @@
+# Video-specific config for: DENAMHON
+# Final: Keep only MAIN actors (30+ images) for cleaner results
+
+clustering:
+  distance_threshold:
+    default: 1.15  # Base works well
+
+merge:
+  within_movie_threshold: 0.55
+
+post_merge:
+  distance_threshold: 0.60
+
+# min_size=18 is optimal (tested: 6 clusters, Purity 0.55)
+filter_clusters:
+  min_size: 18
+
+quality_filters:
+  min_det_score: 0.50  # Moderate (not too strict)
+  min_blur_clarity: 50.0  # Moderate
+  min_face_size: 60  # Moderate
+  landmark_quality_filter:
+    enable: true
+    min_score_hard_cutoff: 0.60
+    min_score_for_core: 0.75
