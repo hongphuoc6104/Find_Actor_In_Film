@@ -93,6 +93,28 @@ pip install -r requirements.txt
 > - `fastapi` - API framework
 > - Và các thư viện khác...
 
+#### 🪟 Cho Windows: Nếu gặp lỗi khi cài đặt
+
+**1. Lỗi `Microsoft Visual C++ 14.0 or greater is required` (khi cài insightface):**
+```powershell
+# Cài insightface từ wheel có sẵn thay vì build từ source
+pip install https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp310-cp310-win_amd64.whl
+```
+
+**2. Lỗi `numpy.dtype size changed`:**
+```powershell
+pip install "numpy<2.0.0" --force-reinstall
+```
+
+**3. Lỗi `DLL load failed` (khi import onnxruntime):**
+- Tải và cài Visual C++ Redistributable: https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+**4. Lỗi PowerShell: `running scripts is disabled`:**
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+# Gõ Y và Enter để xác nhận
+```
+
 ---
 
 ### Bước 6: GPU Acceleration (Tùy chọn)
