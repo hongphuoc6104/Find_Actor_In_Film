@@ -221,7 +221,8 @@ def run_process_pipeline(job_id: str, movie_title: str, mode: str, params: dict)
         
         result = subprocess.run(
             cmd, capture_output=True, text=True, 
-            timeout=7200, cwd=os.getcwd(), env=env
+            timeout=7200, cwd=os.getcwd(), env=env,
+            encoding='utf-8', errors='replace'
         )
         
         output_combined = result.stdout + result.stderr
@@ -535,7 +536,8 @@ def run_pipeline_background(job_id: str, movie_title: str):
             capture_output=True,
             text=True,
             timeout=1800,  # 30 minutes timeout
-            cwd=os.getcwd()
+            cwd=os.getcwd(),
+            encoding='utf-8', errors='replace'
         )
         
         if result.returncode == 0:
@@ -634,7 +636,8 @@ def run_download_and_pipeline(job_id: str, url: str, movie_title: str, output_pa
         # No skip flags - run everything A-Z for new videos
         result = subprocess.run(
             [VENV_PYTHON, "-m", "flows.pipeline", "--movie", movie_title],
-            capture_output=True, text=True, timeout=3600, cwd=os.getcwd(), env=env
+            capture_output=True, text=True, timeout=3600, cwd=os.getcwd(), env=env,
+            encoding='utf-8', errors='replace'
         )
         
         # Check for success - look for completion indicators
