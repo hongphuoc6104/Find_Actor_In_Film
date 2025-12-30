@@ -1,12 +1,20 @@
 # flows/pipeline.py
 # !/usr/bin/env python3
 from __future__ import annotations
-from typing import Optional
 
-
-import argparse
-import os
 import sys
+import os
+
+# Fix Windows console encoding for Vietnamese characters
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except:
+        pass
+
+from typing import Optional
+import argparse
 import json
 import pandas as pd
 from prefect import flow
@@ -59,7 +67,7 @@ def face_clustering_pipeline(
     # Load base config with video-specific overrides (if exists)
     base_cfg = load_video_config(active_movie)
 
-    banner(f"🎬 PIPELINE START: {active_movie}")
+    banner(f"PIPELINE START: {active_movie}")
 
     # 1. Ingestion
     if not skip_ingestion:
@@ -165,7 +173,7 @@ def face_clustering_pipeline(
         if not quiet: print("[Skip] Evaluation skipped")
 
 
-    banner("✅ PIPELINE COMPLETED")
+    banner("PIPELINE COMPLETED")
     return {"status": "SUCCESS", "manifest": manifest_path}
 
 

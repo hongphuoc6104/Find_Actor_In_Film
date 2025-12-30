@@ -368,14 +368,22 @@ quality_filters:
 | `error: Microsoft Visual C++ 14.0 or greater is required` khi cài `insightface` | Thiếu build tools | Tải wheel có sẵn: `pip install https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp310-cp310-win_amd64.whl` |
 | `ValueError: numpy.dtype size changed` | numpy 2.x không tương thích với InsightFace | Hạ cấp numpy: `pip install "numpy<2.0.0" --force-reinstall` |
 | `DLL load failed while importing onnxruntime_pybind11_state` | Thiếu Visual C++ Redistributable | Tải và cài từ: https://aka.ms/vs/17/release/vc_redist.x64.exe |
-| `UnicodeEncodeError` với emoji trong console | Windows console không hỗ trợ emoji | Đã fix trong code - nếu gặp lỗi, xóa emoji trong print statements |
+| `UnicodeEncodeError: 'charmap' codec can't encode characters` | Windows console không hỗ trợ Unicode/tiếng Việt | Đã fix trong code (v1.2.1+). Nếu gặp lỗi, thêm vào đầu file Python: `sys.stdout.reconfigure(encoding='utf-8', errors='replace')` |
 | `Vite requires Node.js version 20.19+` | Node.js quá cũ | Cài Node.js >= 20.19.0 từ https://nodejs.org/ |
 | `FileNotFoundError` khi tải YouTube | yt-dlp không trong PATH | Đã fix trong code - nếu gặp lỗi, chạy: `.venv\Scripts\yt-dlp.exe` thay vì `yt-dlp` |
+| `ModuleNotFoundError: No module named 'pandas'` khi xử lý video | Pipeline dùng Python hệ thống thay vì venv | Đã fix trong code (v1.2.1+). Đảm bảo chạy Backend từ venv đã activated |
 
 > ⚠️ **Lưu ý cho Windows:**
 > - Nên cài **Visual C++ Redistributable 2015-2022** trước khi bắt đầu
 > - Dùng **Node.js >= 20.19.0** (không dùng phiên bản cũ hơn)
 > - Nếu gặp lỗi build InsightFace, dùng wheel có sẵn thay vì build từ source
+
+### ⚠️ Lỗi khi xử lý video
+
+| Lỗi | Nguyên nhân | Giải pháp |
+|-----|-------------|-----------|
+| `[Stop] No embeddings found` hoặc không có nhóm nào được tạo | Video quá ngắn, chất lượng thấp, hoặc không có khuôn mặt rõ | Thử video khác có nhiều khuôn mặt hơn, hoặc giảm `min_det_score` trong config |
+| Pipeline chạy xong nhưng không có kết quả tìm kiếm | Clustering không tạo được nhóm nào (video quá ngắn hoặc ít mặt) | Đây là hành vi bình thường với video ngắn (<1 phút). Thử video dài hơn |
 
 ### Kiểm tra cài đặt
 

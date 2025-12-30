@@ -1,6 +1,11 @@
 # api/main.py
 import sys
 import os
+
+# Fix Windows console encoding for Vietnamese characters
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 from pathlib import Path
 import json
 import uuid
@@ -26,6 +31,9 @@ from services.scene_loader import _read_metadata
 
 # Path to yt-dlp in venv (fix for Windows PATH issues)
 YT_DLP_PATH = str(Path(sys.executable).parent / "yt-dlp.exe")
+
+# Path to Python in venv (fix for subprocess using system Python)
+VENV_PYTHON = sys.executable
 
 
 # --- Startup Event: Preload models ---
@@ -196,7 +204,7 @@ def run_process_pipeline(job_id: str, movie_title: str, mode: str, params: dict)
         process_jobs[job_id]["stage"] = "Đang khởi động pipeline..."
         
         # Build command based on mode
-        cmd = ["python", "-m", "flows.pipeline", "--movie", movie_title]
+        cmd = [VENV_PYTHON, "-m", "flows.pipeline", "--movie", movie_title]
         
         if mode == "recluster":
             # Skip ingestion and embedding, only run clustering stages
@@ -523,7 +531,7 @@ def run_pipeline_background(job_id: str, movie_title: str):
         
         # Run pipeline with fast mode
         result = subprocess.run(
-            ["python", "-m", "flows.pipeline", "--movie", movie_title, "--skip-ingestion"],
+            [VENV_PYTHON, "-m", "flows.pipeline", "--movie", movie_title, "--skip-ingestion"],
             capture_output=True,
             text=True,
             timeout=1800,  # 30 minutes timeout
@@ -625,7 +633,7 @@ def run_download_and_pipeline(job_id: str, url: str, movie_title: str, output_pa
         # Run FULL pipeline with ALL stages (preview, labeling, evaluation)
         # No skip flags - run everything A-Z for new videos
         result = subprocess.run(
-            ["python", "-m", "flows.pipeline", "--movie", movie_title],
+            [VENV_PYTHON, "-m", "flows.pipeline", "--movie", movie_title],
             capture_output=True, text=True, timeout=3600, cwd=os.getcwd(), env=env
         )
         
