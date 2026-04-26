@@ -1,5 +1,38 @@
 # Face Clustering & Actor Search System
 
+## Giới Thiệu Dự Án
+
+Đây là hệ thống AI giúp tìm diễn viên/nhân vật trong phim bằng ảnh khuôn mặt. Người dùng có thể tải video, chạy pipeline xử lý, sau đó upload một ảnh để hệ thống trả về các phim có khuôn mặt tương tự, kèm các đoạn thời gian xuất hiện.
+
+### Bài Toán
+- Tìm một diễn viên/nhân vật trong kho phim lớn bằng ảnh đầu vào.
+- Tránh việc phải xem thủ công toàn bộ video để dò cảnh xuất hiện.
+- Tự động hóa quá trình trích xuất frame, nhận diện mặt, gom cụm và truy vấn.
+
+### Hướng Giải Quyết
+- Tách video thành frame theo pipeline tự động.
+- Phát hiện khuôn mặt bằng InsightFace.
+- Tạo embedding và gom cụm khuôn mặt thành từng nhân vật.
+- Lưu kết quả vào warehouse để phục vụ tìm kiếm nhanh.
+- Cho phép upload ảnh truy vấn và trả về phim, score và timestamp.
+
+### Điểm Nổi Bật
+- Pipeline xử lý video nhiều giai đoạn, có thể chạy full hoặc chạy lại phần clustering.
+- Có giao diện web 3 tab: tải video, xử lý video, tìm kiếm khuôn mặt.
+- Hỗ trợ tinh chỉnh tham số cho detection, clustering, filtering và post-merge.
+- Tự động tạo preview ảnh nhân vật và manifest kết quả.
+
+### Luồng Hoạt Động
+`Video/Input -> Frame Extraction -> Face Detection -> Embedding -> Clustering -> Character Manifest -> Image Search -> Timestamp Results`
+
+### Tech Stack
+- Backend: `FastAPI`, `Python`
+- AI/CV: `InsightFace`, `ONNX Runtime`, `OpenCV`, `scikit-learn`
+- Orchestration: `Prefect`
+- Frontend: `Vue 3`, `Vite`
+- Download/Video: `yt-dlp`, `FFmpeg`
+- Storage: `Parquet`, `JSON`
+
 
 ## Cài Đặt & Chạy
 
