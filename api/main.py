@@ -11,6 +11,7 @@ import json
 import uuid
 from typing import Optional
 from enum import Enum
+import shutil
 
 # Thêm thư mục gốc vào sys.path để có thể import các module khác
 sys.path.insert(0, os.getcwd())
@@ -29,8 +30,11 @@ from services.recognition import recognize
 from utils.config_loader import load_config, deep_merge
 from services.scene_loader import _read_metadata
 
-# Path to yt-dlp in venv (fix for Windows PATH issues)
-YT_DLP_PATH = str(Path(sys.executable).parent / "yt-dlp.exe")
+# Path to yt-dlp in venv/PATH (fix for Windows PATH issues, keep Linux/Docker support)
+if sys.platform == "win32":
+    YT_DLP_PATH = str(Path(sys.executable).parent / "yt-dlp.exe")
+else:
+    YT_DLP_PATH = shutil.which("yt-dlp") or "yt-dlp"
 
 # Path to Python in venv (fix for subprocess using system Python)
 VENV_PYTHON = sys.executable
@@ -40,13 +44,16 @@ VENV_PYTHON = sys.executable
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Preload InsightFace model khi server khởi động"""
-    print("[Startup] Preloading InsightFace model...")
-    try:
-        from utils.search_actor import _get_app
-        _get_app()  # Load model vào RAM
-        print("[Startup] InsightFace model loaded successfully!")
-    except Exception as e:
-        print(f"[Startup] Could not preload model: {e}")
+    if os.getenv("PRELOAD_MODEL", "1") == "1":
+        print("[Startup] Preloading InsightFace model...")
+        try:
+            from utils.search_actor import _get_app
+            _get_app()  # Load model vào RAM
+            print("[Startup] InsightFace model loaded successfully!")
+        except Exception as e:
+            print(f"[Startup] Could not preload model: {e}")
+    else:
+        print("[Startup] PRELOAD_MODEL=0, skipping InsightFace preload.")
     yield
     print("[Shutdown] Server stopping...")
 

@@ -1,0 +1,67 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      PREFECT_LOGGING_LEVEL: WARNING
+      PRELOAD_MODEL: 0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./Data:/app/Data
+      - ./warehouse:/app/warehouse
+      - ./configs:/app/configs
+      - insightface-cache:/root/.insightface
+    depends_on:
+      - redis
+    command: >
+      sh -c "mkdir -p Data/video Data/frames Data/face_crops Data/embeddings
+      warehouse/parquet warehouse/cluster_previews warehouse/evaluation warehouse/labeled_faces temp_uploads
+      && uvicorn api.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      PREFECT_LOGGING_LEVEL: WARNING
+    volumes:
+      - ./Data:/app/Data
+      - ./warehouse:/app/warehouse
+      - ./configs:/app/configs
+      - insightface-cache:/root/.insightface
+    depends_on:
+      - redis
+    command: >
+      sh -c "mkdir -p Data/video Data/frames Data/face_crops Data/embeddings
+      warehouse/parquet warehouse/cluster_previews warehouse/evaluation warehouse/labeled_faces temp_uploads
+      && celery -A api.celery_worker.celery_app worker --loglevel=info"
+
+  frontend:
+    build:
+      context: ./frontend-client
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  redis-data:
+  insightface-cache:

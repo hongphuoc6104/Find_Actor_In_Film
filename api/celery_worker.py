@@ -14,9 +14,14 @@ from flows.pipeline import face_clustering_pipeline
 # Chỉ cần import load_config và deep_merge
 from utils.config_loader import load_config, deep_merge
 
-celery_app = Celery('worker', broker='redis://localhost:6379/0', backend='redis://localhost:6379/0')
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", f"redis://{REDIS_HOST}:{REDIS_PORT}/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+
+celery_app = Celery('worker', broker=CELERY_BROKER_URL, backend=CELERY_RESULT_BACKEND)
 celery_app.conf.task_track_started = True
-redis_client = redis.StrictRedis(host='localhost', port=6379, db=1, decode_responses=True)
+redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=1, decode_responses=True)
 
 
 @celery_app.task(bind=True)

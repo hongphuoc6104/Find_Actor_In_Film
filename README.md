@@ -36,6 +36,60 @@
 
 ## Cài Đặt & Chạy
 
+### Cách Nhanh Nhất: Chạy Bằng Docker
+
+Nếu chỉ muốn chạy dự án nhanh, dùng Docker Compose để khởi động toàn bộ hệ thống gồm backend, frontend, Redis và worker.
+
+**Yêu cầu:**
+- Docker Desktop hoặc Docker Engine
+- Docker Compose v2
+- RAM khuyến nghị từ 16GB vì model nhận diện khuôn mặt khá nặng
+
+**Clone và chạy:**
+```bash
+git clone https://github.com/hongphuoc6104/Find_Actor_In_Film.git
+cd Find_Actor_In_Film
+docker compose up --build
+```
+
+**Mở ứng dụng:**
+- Frontend: http://localhost:5173
+- API Docs: http://localhost:8000/docs
+
+**Dừng ứng dụng:**
+```bash
+docker compose down
+```
+
+**Chạy nền:**
+```bash
+docker compose up --build -d
+```
+
+**Xem log:**
+```bash
+docker compose logs -f backend
+docker compose logs -f worker
+docker compose logs -f frontend
+```
+
+**Dữ liệu được lưu ở máy thật:**
+- Video: `Data/video/`
+- Frames/crops/embeddings: `Data/frames/`, `Data/face_crops/`, `Data/embeddings/`
+- Kết quả xử lý: `warehouse/`
+- Config: `configs/`
+
+**Model InsightFace:**
+- Docker bỏ preload model lúc startup để giao diện mở nhanh hơn.
+- Lần đầu dùng chức năng tìm kiếm/xử lý khuôn mặt, container sẽ tải model `buffalo_l`.
+- Model được cache trong Docker volume `insightface-cache`, nên các lần chạy sau không cần tải lại.
+
+> Lưu ý: Docker mặc định chạy ONNX Runtime CPU. Nếu muốn dùng NVIDIA GPU trong container, cần cài NVIDIA Container Toolkit và chỉnh thêm cấu hình GPU cho service backend/worker.
+
+---
+
+### Cài Đặt Thủ Công
+
 ### Yêu Cầu Hệ Thống
 
 | Yêu cầu | Tối thiểu | Khuyến nghị |
@@ -235,7 +289,7 @@ Giao diện có 3 tabs:
 
 **Quy trình:**
 1. Mở `http://localhost:5173`
-2. Tab **� Tải Video** → Paste URL → Click **"Tải Video"**
+2. Tab **Tải Video** → Paste URL → Click **"Tải Video"**
 3. Tab **⚙️ Xử Lý** → Chọn video → Điều chỉnh tham số (tùy chọn) → **"Bắt Đầu Xử Lý"**
 4. Tab **🔍 Tìm Kiếm** → Upload ảnh → Xem kết quả
 
